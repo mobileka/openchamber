@@ -16,7 +16,7 @@ Component interaction keys that are not application commands, such as list navig
 
 - `index.ts` is the only public import surface, exposed as `@/lib/shortcuts`.
 - `config.ts` owns grouped declarations and the final `SHORTCUT_SCHEMA`.
-- `schema.ts` derives action and category types and provides schema lookup and effective binding resolution.
+- `schema.ts` derives action and category types and provides schema lookup, effective binding resolution, and the recorded-combo lookup (`getShortcutActionsForCombo`) that the Shortcuts page filter uses.
 - `bindings.ts` owns chord parsing, normalization, display, browser-risk checks, and conflict rules.
 - `registry.ts` owns the active handler for each action ID and stack-safe temporary suspension of all application handlers.
 - `dispatcher.ts` resolves current bindings and turns keyboard events into registered command calls.
