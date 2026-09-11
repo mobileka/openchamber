@@ -1,11 +1,13 @@
-// The two settings files and how a merged document is split between them.
+// The settings files and how a merged document is split between them.
 //
 // `settings.json` holds instance facts (and, untouched, whatever legacy keys
 // older builds left there). `preferences.json` holds the user's profile: the
 // keys the settings registry marks `profile`, each with the time the store
-// last accepted a new value for it. Device keys never reach either file.
+// last accepted a new value for it. `keybindings.json` holds the user's hotkey
+// overrides (`shortcutOverrides`) as a plain action id → combo map, so they can
+// be edited by hand; device keys never reach any of the files.
 //
-// The VS Code extension host writes the same two files with the same shape
+// The VS Code extension host writes the same files with the same shape
 // (`packages/vscode/src/settings-files.ts`); keep the format changes in sync.
 import { createRequire } from 'node:module';
 
@@ -13,6 +15,10 @@ const registry = createRequire(import.meta.url)('./settings-registry.json');
 
 const PREFERENCES_FILE_NAME = 'preferences.json';
 const PREFERENCES_DOCUMENT_VERSION = 1;
+const KEYBINDINGS_FILE_NAME = 'keybindings.json';
+
+/** The profile key stored in `keybindings.json` instead of `preferences.json`. */
+export const KEYBINDINGS_SETTINGS_KEY = 'shortcutOverrides';
 
 /** The registry scope for a key, or `null` when the registry does not know it. */
 const getSettingsScope = (key) => registry.fields[key]?.scope ?? null;
@@ -22,6 +28,9 @@ export const isDeviceSettingsKey = (key) => getSettingsScope(key) === 'device';
 
 /** Profile keys the owner chose to store per surface kind (a change on a phone stays on phones). */
 const isPerSurfaceSettingsKey = (key) => registry.fields[key]?.perSurface === true;
+
+/** The key whose value lives in `keybindings.json`, not `preferences.json`. */
+export const isKeybindingsSettingsKey = (key) => key === KEYBINDINGS_SETTINGS_KEY;
 
 const SETTINGS_SURFACES = Object.freeze(['web', 'desktop', 'vscode', 'mobile']);
 
@@ -40,6 +49,7 @@ export const settingsSurfaceOf = (req) => (
 );
 
 export const preferencesFilePathFor = (settingsFilePath, path) => path.join(path.dirname(settingsFilePath), PREFERENCES_FILE_NAME);
+export const keybindingsFilePathFor = (settingsFilePath, path) => path.join(path.dirname(settingsFilePath), KEYBINDINGS_FILE_NAME);
 
 const isPlainObject = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
@@ -94,6 +104,28 @@ export const parsePreferencesDocument = (raw) => {
 export const serializePreferencesDocument = (fields) => JSON.stringify({ version: PREFERENCES_DOCUMENT_VERSION, fields }, null, 2);
 
 /**
+ * Parse the text of a keybindings file: a plain action id → combo map, the
+ * same value shape `shortcutOverrides` always had. A missing file is the
+ * caller's case (ENOENT); invalid JSON or a non-object document is a failure,
+ * never an empty override set. Entry values are validated where the merged
+ * document is sanitized, so one bad binding does not hide the rest of the file.
+ */
+export const parseKeybindingsDocument = (raw) => {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return { ok: false, reason: `invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  if (!isPlainObject(parsed)) {
+    return { ok: false, reason: 'not a keybindings object' };
+  }
+  return { ok: true, overrides: parsed };
+};
+
+export const serializeKeybindingsDocument = (overrides) => JSON.stringify(overrides ?? {}, null, 2);
+
+/**
  * The plain key → value view of preference fields as one surface kind sees it:
  * that surface's own value first, the base value otherwise; a key with neither
  * is absent (the client keeps what it holds, or its default).
@@ -129,6 +161,8 @@ export const buildPreferencesFields = (previousFields, document, now, { surface 
   const changed = changedKeys ? new Set(changedKeys) : null;
   for (const [key, value] of Object.entries(document)) {
     if (value === undefined || !isProfileSettingsKey(key)) continue;
+    // Keybinding overrides live in keybindings.json, never in preferences.json.
+    if (isKeybindingsSettingsKey(key)) continue;
     const previous = previousFields[key];
     if (isPerSurfaceSettingsKey(key) && surface) {
       if (changed && !changed.has(key)) {
@@ -177,14 +211,22 @@ export const profilePartOf = (document) => {
 
 /**
  * What `settings.json` holds after a write: the instance part plus a copy of
- * the profile's base values. The copy is for builds that predate the split —
+ * the profile's base values (including keybinding overrides, whose canonical
+ * file is `keybindings.json`). The copy is for builds that predate the split —
  * they read only this file, so a rollback still finds the user's preferences.
- * Current builds ignore it: `preferences.json` wins in the merged read.
+ * Current builds ignore it: `preferences.json` and `keybindings.json` win in
+ * the merged read.
  */
-export const legacySettingsDocumentOf = (document, preferenceFields) => ({
-  ...instancePartOf(document),
-  ...flattenPreferences(preferenceFields),
-});
+export const legacySettingsDocumentOf = (document, preferenceFields) => {
+  const shared = {
+    ...instancePartOf(document),
+    ...flattenPreferences(preferenceFields),
+  };
+  if (isPlainObject(document[KEYBINDINGS_SETTINGS_KEY])) {
+    shared[KEYBINDINGS_SETTINGS_KEY] = document[KEYBINDINGS_SETTINGS_KEY];
+  }
+  return shared;
+};
 
 /** The profile keys of a document, as they would seed a fresh preferences file. */
 export const seedPreferencesFrom = (document, now) => buildPreferencesFields({}, document, now);
