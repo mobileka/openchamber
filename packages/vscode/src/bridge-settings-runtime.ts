@@ -10,11 +10,15 @@ import {
   buildPreferencesFields,
   flattenPreferences,
   instancePartOf,
+  KEYBINDINGS_SETTINGS_KEY,
+  keybindingsFilePathFor,
   legacySettingsDocumentOf,
   profilePartOf,
+  parseKeybindingsDocument,
   parsePreferencesDocument,
   preferencesFilePathFor,
   seedPreferencesFrom,
+  serializeKeybindingsDocument,
   serializePreferencesDocument,
   type PreferenceFields,
   VSCODE_SETTINGS_SURFACE,
@@ -23,6 +27,7 @@ import {
 const SETTINGS_KEY = 'openchamber.settings';
 const OPENCHAMBER_SHARED_SETTINGS_PATH = path.join(os.homedir(), '.config', 'openchamber', 'settings.json');
 const OPENCHAMBER_PREFERENCES_PATH = preferencesFilePathFor(OPENCHAMBER_SHARED_SETTINGS_PATH);
+const OPENCHAMBER_KEYBINDINGS_PATH = keybindingsFilePathFor(OPENCHAMBER_SHARED_SETTINGS_PATH);
 const OPENCHAMBER_MAGIC_PROMPTS_PATH = path.join(os.homedir(), '.config', 'openchamber', 'magic-prompts.json');
 const MAGIC_PROMPTS_FILE_VERSION = 1;
 const MAGIC_PROMPT_ID_PATTERN = /^[a-z0-9._-]{1,160}$/;
@@ -175,14 +180,15 @@ export const fetchOpenCodeSkillsFromApi = async (
   }
 };
 
-// Settings live in two files beside each other (see `settings-files.ts`):
+// Settings live in three files beside each other (see `settings-files.ts`):
 // `settings.json` holds instance facts and legacy keys, `preferences.json`
-// holds the profile keys with their `updatedAt` stamps. Reads return the
-// merged view; writes split a merged document back into the two files.
+// holds the profile keys with their `updatedAt` stamps, and `keybindings.json`
+// holds hotkey overrides as a plain action id → combo map. Reads return the
+// merged view; writes split a merged document back into the files.
 //
 // A settings.json parse failure (corrupt or non-object file) is still coerced
 // to `{}`, which lets the next write replace it; tracked in the settings-scopes
-// plan. preferences.json already fails closed below.
+// plan. preferences.json and keybindings.json already fail closed below.
 const readSettingsJsonFromDisk = (): Record<string, unknown> => {
   try {
     const raw = fs.readFileSync(OPENCHAMBER_SHARED_SETTINGS_PATH, 'utf8');
@@ -209,6 +215,11 @@ type PreferencesReadResult =
 let preferencesUnavailable = false;
 let preferencesUnavailableLogged = false;
 
+// Same contract for keybindings.json, tracked independently so a corrupt
+// keybindings file never blocks unrelated profile writes and vice versa.
+let keybindingsUnavailable = false;
+let keybindingsUnavailableLogged = false;
+
 const readPreferencesFromDisk = (): PreferencesReadResult => {
   let result: PreferencesReadResult;
   try {
@@ -230,6 +241,36 @@ const readPreferencesFromDisk = (): PreferencesReadResult => {
     }
   } else {
     preferencesUnavailable = false;
+  }
+  return result;
+};
+
+type KeybindingsReadResult =
+  | { status: 'ok'; overrides: unknown }
+  | { status: 'missing' }
+  | { status: 'unreadable'; reason: string };
+
+const readKeybindingsFromDisk = (): KeybindingsReadResult => {
+  let result: KeybindingsReadResult;
+  try {
+    const parsed = parseKeybindingsDocument(fs.readFileSync(OPENCHAMBER_KEYBINDINGS_PATH, 'utf8'));
+    result = parsed.ok ? { status: 'ok', overrides: parsed.overrides } : { status: 'unreadable', reason: parsed.reason };
+  } catch (error) {
+    // SAFETY: fs errors carry a `code` string; anything else is reported by message.
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    result = code === 'ENOENT'
+      ? { status: 'missing' }
+      : { status: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
+  }
+
+  if (result.status === 'unreadable') {
+    keybindingsUnavailable = true;
+    if (!keybindingsUnavailableLogged) {
+      keybindingsUnavailableLogged = true;
+      console.warn(`[OpenChamber] ${OPENCHAMBER_KEYBINDINGS_PATH} could not be read (${result.reason}); keybinding writes are paused until the file is fixed or removed.`);
+    }
+  } else {
+    keybindingsUnavailable = false;
   }
   return result;
 };
@@ -265,9 +306,34 @@ const writeJsonAtomicSync = (filePath: string, text: string): void => {
   }
 };
 
-// Merged view of both files. A missing preferences.json is seeded once from the
-// profile keys settings.json still carries; every write keeps a copy of the
-// profile's base values in settings.json, so an older build can still read it.
+// Merged view of the shared files. A missing preferences.json is seeded once
+// from the profile keys settings.json still carries; a missing keybindings.json
+// is seeded once from the legacy override copy (an empty map is an explicit
+// "no overrides" that clients must adopt). Every write keeps a copy of the
+// profile's base values (and the keybinding overrides) in settings.json, so an
+// older build can still read them.
+const applyKeybindingsToDocument = (document: Record<string, unknown>) => {
+  const keybindings = readKeybindingsFromDisk();
+  const next = { ...document };
+  if (keybindings.status === 'unreadable') {
+    delete next[KEYBINDINGS_SETTINGS_KEY];
+    return next;
+  }
+  if (keybindings.status === 'missing') {
+    const parsedLegacy = parseKeybindingsDocument(JSON.stringify(next[KEYBINDINGS_SETTINGS_KEY] ?? {}));
+    const seeded = parsedLegacy.ok ? parsedLegacy.overrides : {};
+    try {
+      writeJsonAtomicSync(OPENCHAMBER_KEYBINDINGS_PATH, serializeKeybindingsDocument(seeded));
+    } catch (error) {
+      console.warn('[OpenChamber] Failed to seed keybindings.json:', error instanceof Error ? error.message : String(error));
+    }
+    next[KEYBINDINGS_SETTINGS_KEY] = seeded;
+    return next;
+  }
+  next[KEYBINDINGS_SETTINGS_KEY] = keybindings.overrides;
+  return next;
+};
+
 const readSharedSettingsFromDisk = (): Record<string, unknown> => {
   const settings = readSettingsJsonFromDisk();
   let preferences = readPreferencesFromDisk();
@@ -281,27 +347,45 @@ const readSharedSettingsFromDisk = (): Record<string, unknown> => {
     preferences = { status: 'ok', fields: seeded };
   }
   if (preferences.status !== 'ok') {
-    return settings;
+    return applyKeybindingsToDocument(settings);
   }
-  return { ...settings, ...flattenPreferences(preferences.fields, VSCODE_SETTINGS_SURFACE) };
+  return applyKeybindingsToDocument({ ...settings, ...flattenPreferences(preferences.fields, VSCODE_SETTINGS_SURFACE) });
 };
 
-// Write a complete merged document: profile keys go to preferences.json (keeping
-// the stamps of unchanged values), everything else to settings.json. A key the
-// document no longer carries leaves whichever file owned it.
+// Write a complete merged document: keybinding overrides go to
+// keybindings.json, other profile keys to preferences.json (keeping the stamps
+// of unchanged values), everything else to settings.json. A key the document no
+// longer carries leaves whichever file owned it.
 const writeSharedSettingsToDisk = async (
   document: Record<string, unknown>,
   changedKeys: Iterable<string> | null = null,
 ): Promise<void> => {
+  const keybindingsValue = document[KEYBINDINGS_SETTINGS_KEY];
+  const changed = changedKeys ? new Set(changedKeys) : null;
+  // Unrelated saves must not rewrite the keybindings file; migration-style
+  // writes (no changedKeys) refresh it whenever the document carries it.
+  const hasKeybindings = keybindingsValue !== undefined
+    && !keybindingsUnavailable
+    && (!changed || changed.has(KEYBINDINGS_SETTINGS_KEY));
+  if (hasKeybindings) {
+    // Its own file goes first: a failure here aborts before the legacy copies
+    // in settings.json are refreshed, so a retry sees the same document.
+    await writeJsonAtomic(OPENCHAMBER_KEYBINDINGS_PATH, serializeKeybindingsDocument(keybindingsValue));
+  }
+
   const preferences = readPreferencesFromDisk();
   if (preferencesUnavailable) {
     console.warn('[OpenChamber] preferences.json is unreadable; profile settings were not saved.');
     // settings.json keeps whatever legacy profile copy it already holds.
     const onDisk = readSettingsJsonFromDisk();
-    await writeJsonAtomic(OPENCHAMBER_SHARED_SETTINGS_PATH, JSON.stringify({
+    const legacyInstance = {
       ...instancePartOf(document),
       ...profilePartOf(onDisk),
-    }, null, 2));
+    };
+    if (hasKeybindings) {
+      legacyInstance[KEYBINDINGS_SETTINGS_KEY] = keybindingsValue;
+    }
+    await writeJsonAtomic(OPENCHAMBER_SHARED_SETTINGS_PATH, JSON.stringify(legacyInstance, null, 2));
     return;
   }
   const previousFields = preferences.status === 'ok' ? preferences.fields : {};
@@ -422,6 +506,13 @@ export const persistSettings = async (changes: Record<string, unknown>, ctx?: Br
   const current = readSettings(ctx);
   // Only keys the settings registry knows as stored shared fields reach disk.
   const restChanges = filterPersistableSettingsChanges(stripDerived({ ...(changes || {}) }));
+
+  // Keybinding overrides live in their own file, so a corrupt preferences.json
+  // does not block them; a corrupt keybindings.json drops only this key.
+  if (keybindingsUnavailable && Object.prototype.hasOwnProperty.call(restChanges, KEYBINDINGS_SETTINGS_KEY)) {
+    console.warn('[OpenChamber] keybindings.json is unreadable; shortcut overrides were not saved.');
+    delete restChanges[KEYBINDINGS_SETTINGS_KEY];
+  }
 
   const keysToClear = new Set<string>();
 

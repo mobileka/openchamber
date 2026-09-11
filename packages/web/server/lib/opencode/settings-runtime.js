@@ -3,14 +3,19 @@ import {
   buildPreferencesFields,
   flattenPreferences,
   instancePartOf,
-  legacySettingsDocumentOf,
-  profilePartOf,
   isDeviceSettingsKey,
+  isKeybindingsSettingsKey,
   isProfileSettingsKey,
+  KEYBINDINGS_SETTINGS_KEY,
+  keybindingsFilePathFor,
+  legacySettingsDocumentOf,
   normalizeSettingsSurface,
+  parseKeybindingsDocument,
   parsePreferencesDocument,
   preferencesFilePathFor,
+  profilePartOf,
   seedPreferencesFrom,
+  serializeKeybindingsDocument,
   serializePreferencesDocument,
 } from './settings-files.js';
 
@@ -63,11 +68,16 @@ export const createSettingsRuntime = (deps) => {
   let persistSettingsLock = Promise.resolve();
 
   const PREFERENCES_FILE_PATH = preferencesFilePathFor(SETTINGS_FILE_PATH, path);
+  const KEYBINDINGS_FILE_PATH = keybindingsFilePathFor(SETTINGS_FILE_PATH, path);
   // True while preferences.json exists but cannot be read. Profile writes are
   // refused meanwhile so a corrupt file is never overwritten with a seed or a
   // partial document; clients keep the values they hold.
   let preferencesUnavailable = false;
   let preferencesFailureLogged = false;
+  // Same contract for keybindings.json, tracked independently so a corrupt
+  // keybindings file never blocks unrelated profile writes and vice versa.
+  let keybindingsUnavailable = false;
+  let keybindingsFailureLogged = false;
 
   // Orphan recovery is a one-shot best-effort scan: when orphans can't be
   // matched on first pass they stay on disk and every subsequent settings
@@ -572,18 +582,99 @@ export const createSettingsRuntime = (deps) => {
     await writeJsonFileAtomic(PREFERENCES_FILE_PATH, serializePreferencesDocument(fields));
   };
 
-  // The merged document every consumer sees: instance facts from settings.json
-  // plus the profile from preferences.json. On the first read of an install
-  // that predates the split, the profile keys still sitting in settings.json
-  // seed preferences.json. settings.json keeps a copy of the profile's base
-  // values on every write too, so an older build (which reads only that file)
-  // still finds everything where it used to be.
+  const sanitizeKeybindings = (value) => {
+    const sanitized = sanitizeSettingsUpdate({ [KEYBINDINGS_SETTINGS_KEY]: value });
+    return sanitized?.[KEYBINDINGS_SETTINGS_KEY] ?? {};
+  };
+
+  /**
+   * `{ status: 'missing' }` when the file does not exist, `{ status: 'ok',
+   * overrides }` when it parsed, `{ status: 'unreadable', reason }` for
+   * anything else. Only "missing" may be seeded; "unreadable" must leave the
+   * file alone.
+   */
+  const readKeybindingsFromDisk = async () => {
+    let raw;
+    try {
+      raw = await fsPromises.readFile(KEYBINDINGS_FILE_PATH, 'utf8');
+    } catch (error) {
+      if (error?.code === 'ENOENT') {
+        return { status: 'missing' };
+      }
+      return { status: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
+    }
+    const parsed = parseKeybindingsDocument(raw);
+    return parsed.ok ? { status: 'ok', overrides: parsed.overrides } : { status: 'unreadable', reason: parsed.reason };
+  };
+
+  const readKeybindingsWithFailureState = async () => {
+    const result = await readKeybindingsFromDisk();
+    if (result.status === 'unreadable') {
+      keybindingsUnavailable = true;
+      if (!keybindingsFailureLogged) {
+        keybindingsFailureLogged = true;
+        console.warn(`Keybindings file is unreadable (${result.reason}); keybinding writes are paused until it is fixed or removed.`);
+      }
+    } else {
+      keybindingsUnavailable = false;
+      keybindingsFailureLogged = false;
+    }
+    return result;
+  };
+
+  /** The pre-split override value already merged into the document. */
+  const legacyKeybindingsFrom = (document) => {
+    const parsed = parseKeybindingsDocument(JSON.stringify(document[KEYBINDINGS_SETTINGS_KEY] ?? {}));
+    return parsed.ok ? parsed.overrides : {};
+  };
+
+  /**
+   * `keybindings.json` is authoritative for the key once it exists: its value
+   * wins over any legacy copy still sitting in settings.json/preferences.json,
+   * and an empty file is an explicit "no overrides" that clients must adopt. A
+   * missing file is seeded from that legacy copy (or an empty map) on first
+   * read. A file that exists but cannot be parsed contributes nothing — the key
+   * is withheld so clients keep what they hold, and the file is never
+   * overwritten.
+   */
+  const applyKeybindingsToDocument = async (document) => {
+    const keybindings = await readKeybindingsWithFailureState();
+    const next = { ...document };
+
+    if (keybindings.status === 'unreadable') {
+      delete next[KEYBINDINGS_SETTINGS_KEY];
+      return next;
+    }
+
+    if (keybindings.status === 'missing') {
+      const seeded = sanitizeKeybindings(legacyKeybindingsFrom(next));
+      try {
+        await writeJsonFileAtomic(KEYBINDINGS_FILE_PATH, serializeKeybindingsDocument(seeded));
+      } catch (error) {
+        // Keep serving the legacy value this read; the next read retries the seed.
+        console.warn('Failed to seed keybindings file:', error);
+      }
+      next[KEYBINDINGS_SETTINGS_KEY] = seeded;
+      return next;
+    }
+
+    next[KEYBINDINGS_SETTINGS_KEY] = sanitizeKeybindings(keybindings.overrides);
+    return next;
+  };
+
+  // The merged document every consumer sees: instance facts from settings.json,
+  // the profile from preferences.json, and hotkey overrides from
+  // keybindings.json. On the first read of an install that predates a split,
+  // the keys still sitting in the older files seed the newer one. settings.json
+  // keeps a copy of the profile's base values (including keybinding overrides)
+  // on every write too, so an older build (which reads only that file) still
+  // finds everything where it used to be.
   const readSettingsFromDisk = async ({ surface = null } = {}) => {
     const instance = await readInstanceSettingsFromDisk();
     const preferences = await readPreferenceFields();
     if (preferences.status === 'failed') {
       preferencesUnavailable = true;
-      return instance;
+      return applyKeybindingsToDocument(instance);
     }
     preferencesUnavailable = false;
     if (preferences.status === 'missing') {
@@ -593,9 +684,10 @@ export const createSettingsRuntime = (deps) => {
       } catch (error) {
         console.warn('Failed to seed preferences file:', error);
       }
-      return instance;
+      return applyKeybindingsToDocument(instance);
     }
-    return { ...instance, ...flattenPreferences(preferences.fields, normalizeSettingsSurface(surface)) };
+    const merged = { ...instance, ...flattenPreferences(preferences.fields, normalizeSettingsSurface(surface)) };
+    return applyKeybindingsToDocument(merged);
   };
 
   // Strict variant for callers that REGENERATE persisted identity when a key is
@@ -667,7 +759,11 @@ export const createSettingsRuntime = (deps) => {
     try {
       const entries = await fsPromises.readdir(directory, { withFileTypes: true });
       const cleanupTasks = entries
-        .filter((entry) => entry.isFile() && (entry.name.startsWith('settings.json.tmp-') || entry.name.startsWith('preferences.json.tmp-')))
+        .filter((entry) => entry.isFile() && (
+          entry.name.startsWith('settings.json.tmp-')
+          || entry.name.startsWith('preferences.json.tmp-')
+          || entry.name.startsWith('keybindings.json.tmp-')
+        ))
         .map((entry) => fsPromises.rm(path.join(directory, entry.name), { force: true }).catch(() => {}));
       await Promise.all(cleanupTasks);
     } catch {
@@ -697,21 +793,40 @@ export const createSettingsRuntime = (deps) => {
   };
 
   /**
-   * Persist a merged document: profile keys go to preferences.json (stamped
-   * when their value changed), everything else to settings.json. While
-   * preferences.json is unreadable its part is skipped rather than replaced.
+   * Persist a merged document: keybinding overrides go to keybindings.json,
+   * other profile keys to preferences.json (stamped when their value changed),
+   * everything else to settings.json. While preferences.json or
+   * keybindings.json is unreadable its part is skipped rather than replaced.
    */
   const writeSettingsToDisk = async (settings, { surface = null, changedKeys = null } = {}) => {
+    const keybindingsInDocument = settings[KEYBINDINGS_SETTINGS_KEY];
+    const changed = changedKeys ? new Set(changedKeys) : null;
+    // Unrelated saves must not rewrite the keybindings file; migration-style
+    // writes (no changedKeys) refresh it whenever the document carries it.
+    const hasKeybindings = keybindingsInDocument !== undefined
+      && !keybindingsUnavailable
+      && (!changed || changed.has(KEYBINDINGS_SETTINGS_KEY));
+    if (hasKeybindings) {
+      // Its own file goes first: a failure here aborts before the legacy copies
+      // in settings.json are refreshed, so a retry sees the same document.
+      await writeJsonFileAtomic(KEYBINDINGS_FILE_PATH, serializeKeybindingsDocument(keybindingsInDocument));
+    }
+
     const current = preferencesUnavailable ? { status: 'failed' } : await readPreferenceFields();
     if (current.status === 'failed') {
       // The profile part is not saved; settings.json keeps whatever legacy
-      // profile copy it already holds rather than losing it too.
+      // profile copy it already holds rather than losing it too. Keybinding
+      // overrides are still refreshed there when their own write succeeded.
       preferencesUnavailable = true;
       const onDisk = await readInstanceSettingsFromDisk();
-      await writeJsonFileAtomic(SETTINGS_FILE_PATH, JSON.stringify({
+      const legacyInstance = {
         ...instancePartOf(settings),
         ...profilePartOf(onDisk),
-      }, null, 2));
+      };
+      if (hasKeybindings) {
+        legacyInstance[KEYBINDINGS_SETTINGS_KEY] = keybindingsInDocument;
+      }
+      await writeJsonFileAtomic(SETTINGS_FILE_PATH, JSON.stringify(legacyInstance, null, 2));
       return;
     }
     const previousFields = current.status === 'ok' ? current.fields : {};
@@ -1042,6 +1157,13 @@ export const createSettingsRuntime = (deps) => {
         // the instance; a client that still sends it is simply ignored.
         if (isDeviceSettingsKey(key)) {
           delete sanitized[key];
+        } else if (isKeybindingsSettingsKey(key)) {
+          // Keybinding overrides live in their own file, so a corrupt
+          // preferences.json does not block them and vice versa.
+          if (keybindingsUnavailable) {
+            console.warn(`[persistSettings] Dropping ${key}: keybindings file is unreadable`);
+            delete sanitized[key];
+          }
         } else if (preferencesUnavailable && isProfileSettingsKey(key)) {
           console.warn(`[persistSettings] Dropping ${key}: preferences file is unreadable`);
           delete sanitized[key];
