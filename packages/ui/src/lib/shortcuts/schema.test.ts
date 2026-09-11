@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   getCustomizableShortcutActions,
   getEffectiveShortcutCombo,
+  getShortcutActionsForCombo,
   getShortcutBindingConflicts,
   getShortcutAction,
   parseShortcut,
@@ -104,6 +105,43 @@ describe('shortcut schema', () => {
     expect(internalPrefixConflict?.action.customizable).toBe(false);
     expect(leaderPrefixConflict?.kind).toBe('prefix');
     expect(blockingPrefixConflict?.kind).toBe('prefix');
+  });
+});
+
+describe('getShortcutActionsForCombo', () => {
+  const idsFor = (combo: string, overrides?: Record<string, string>) =>
+    getShortcutActionsForCombo(combo, overrides).map((action) => action.id);
+
+  test('finds an action by its exact binding', () => {
+    expect(idsFor('mod+n')).toEqual(['new_chat']);
+    expect(idsFor('mod+shift+n')).toEqual(['new_chat_worktree']);
+  });
+
+  test('finds a two-chord sequence', () => {
+    expect(idsFor('mod+k p')).toEqual(['open_draft_project_picker']);
+    expect(idsFor('mod+k t')).toEqual(['open_timeline_dialog']);
+  });
+
+  test('finds held-prefix actions by their digit completion', () => {
+    expect(idsFor('mod+1')).toEqual(['switch_session_tab']);
+    expect(idsFor('mod+alt+0')).toEqual(['switch_context_surface']);
+  });
+
+  test('does not treat a non-digit completion as a prefix match', () => {
+    expect(idsFor('mod+k')).toEqual([]);
+    expect(idsFor('mod+alt+n')).toEqual(['new_mini_chat']);
+  });
+
+  test('honors overrides and never matches unassigned actions', () => {
+    expect(idsFor('mod+shift+n', { new_chat_worktree: 'mod+shift+w' })).toEqual([]);
+    expect(idsFor('mod+shift+w', { new_chat_worktree: 'mod+shift+w' })).toEqual(['new_chat_worktree']);
+    expect(idsFor('mod+n', { new_chat: '__unassigned__' })).toEqual([]);
+    expect(idsFor('mod+1', { switch_session_tab: '__unassigned__' })).toEqual([]);
+  });
+
+  test('returns nothing for empty or unassigned input', () => {
+    expect(idsFor('')).toEqual([]);
+    expect(idsFor('__unassigned__')).toEqual([]);
   });
 });
 

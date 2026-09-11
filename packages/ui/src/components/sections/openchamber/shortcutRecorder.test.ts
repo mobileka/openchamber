@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { settleShortcutRecordingState, updateShortcutRecordingState } from './ShortcutRecordingDialog';
+import { settleShortcutRecordingState, updateShortcutRecordingState } from './shortcutRecorder';
 
 const emptyState = { chords: [], livePreview: null, settled: false };
 
@@ -8,7 +8,7 @@ function keyEvent(key: string, modifiers: Partial<Record<'altKey' | 'ctrlKey' | 
   return { key, code, repeat: false, isComposing: false, altKey: false, ctrlKey: false, metaKey: false, shiftKey: false, ...modifiers };
 }
 
-describe('ShortcutRecordingDialog recording state', () => {
+describe('shortcut recorder state', () => {
   test('previews modifiers and clears the preview when they are released', () => {
     const pressed = updateShortcutRecordingState(emptyState, keyEvent('Control', { ctrlKey: true, shiftKey: true }), 'keydown');
     expect(pressed.livePreview).toBe('mod+shift');
