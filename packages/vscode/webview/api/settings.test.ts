@@ -1,7 +1,7 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
 
-type BridgeRequest = { id: string; type: string };
+type BridgeRequest = { id?: string; type: string };
 
 describe('VS Code webview settings API', () => {
   test('propagates a failed bridge read and retries successfully', async () => {
@@ -30,9 +30,19 @@ describe('VS Code webview settings API', () => {
       const { createVSCodeSettingsAPI } = await import(`./settings?settings-failure-${Date.now()}`);
       const api = createVSCodeSettingsAPI();
 
+      // The bridge posts a `webview:ready` handshake before the first request,
+      // so select the settings request by type instead of queue position.
+      const takeSettingsRequest = (): BridgeRequest => {
+        const index = messages.findIndex((message) => message.type === 'api:config/settings:get');
+        assert.ok(index >= 0, 'expected a settings request');
+        const [request] = messages.splice(index, 1);
+        assert.ok(request);
+        return request;
+      };
+
       const failedLoad = api.load();
-      const failedRequest = messages.shift();
-      assert.ok(failedRequest);
+      const failedRequest = takeSettingsRequest();
+      assert.ok(failedRequest.id);
       testWindow.dispatchEvent(new MessageEvent('message', {
         data: {
           id: failedRequest.id,
@@ -44,8 +54,8 @@ describe('VS Code webview settings API', () => {
       await assert.rejects(failedLoad, /settings unavailable/);
 
       const successfulLoad = api.load();
-      const successfulRequest = messages.shift();
-      assert.ok(successfulRequest);
+      const successfulRequest = takeSettingsRequest();
+      assert.ok(successfulRequest.id);
       testWindow.dispatchEvent(new MessageEvent('message', {
         data: {
           id: successfulRequest.id,
