@@ -90,3 +90,41 @@ export function getShortcutBindingConflicts(
   }
   return conflicts;
 }
+
+/**
+ * A recorded press completes a bare-modifier prefix when it is one chord of
+ * the prefix's modifiers plus a single digit (`mod+1`, `mod+alt+0`). The
+ * digits are how the held-prefix actions are addressed at runtime.
+ */
+function recordedCompletesPrefix(prefixCombo: ShortcutCombo, recordedCombo: ShortcutCombo): boolean {
+  const prefix = parseShortcut(prefixCombo)?.chords[0];
+  const recorded = parseShortcut(recordedCombo)?.chords;
+  if (!prefix || prefix.key || prefix.modifiers.size === 0) return false;
+  if (!recorded || recorded.length !== 1) return false;
+  const chord = recorded[0];
+  if (!/^\d$/.test(chord.key)) return false;
+  if (chord.modifiers.size !== prefix.modifiers.size) return false;
+  for (const modifier of prefix.modifiers) {
+    if (!chord.modifiers.has(modifier)) return false;
+  }
+  return true;
+}
+
+/**
+ * Schema actions whose effective binding is the recorded combo: an exact
+ * match, or a digit completion of a `prefixStyle` action (`mod` → session
+ * tabs, `mod+alt` → context surfaces). Unassigned actions never match.
+ */
+export function getShortcutActionsForCombo(
+  combo: ShortcutCombo,
+  overrides?: Record<string, ShortcutCombo>,
+): ShortcutAction[] {
+  const normalized = normalizeCombo(combo);
+  if (!normalized || normalized === UNASSIGNED_SHORTCUT) return [];
+  return SHORTCUT_SCHEMA.filter((action) => {
+    if ('prefixStyle' in action && action.prefixStyle) {
+      return recordedCompletesPrefix(getEffectiveShortcutPrefix(action.id, overrides), normalized);
+    }
+    return getEffectiveShortcutCombo(action.id, overrides) === normalized;
+  });
+}

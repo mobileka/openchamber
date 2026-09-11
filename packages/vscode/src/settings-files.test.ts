@@ -7,9 +7,14 @@ import {
   instancePartOf,
   isDeviceSettingsKey,
   isProfileSettingsKey,
+  KEYBINDINGS_SETTINGS_KEY,
+  keybindingsFilePathFor,
+  legacySettingsDocumentOf,
+  parseKeybindingsDocument,
   parsePreferencesDocument,
   preferencesFilePathFor,
   seedPreferencesFrom,
+  serializeKeybindingsDocument,
   serializePreferencesDocument,
 } from './settings-files';
 import { SETTINGS_REGISTRY_FIELDS } from './settings-registry-gate';
@@ -81,6 +86,35 @@ describe('buildPreferencesFields', () => {
   test('skips undefined values', () => {
     assert.deepEqual(buildPreferencesFields({}, { themeId: undefined }, 1), {});
   });
+
+  test('keeps keybinding overrides out of preferences.json', () => {
+    const next = buildPreferencesFields(
+      { [KEYBINDINGS_SETTINGS_KEY]: { value: { new_chat: 'mod+n' }, updatedAt: 1 } },
+      { [KEYBINDINGS_SETTINGS_KEY]: { new_chat: 'mod+shift+n' }, themeId: 'nord' },
+      200,
+    );
+    assert.deepEqual(next, { themeId: { value: 'nord', updatedAt: 200 } });
+    assert.deepEqual(seedPreferencesFrom({ [KEYBINDINGS_SETTINGS_KEY]: { new_chat: 'mod+n' } }, 1), {});
+  });
+});
+
+describe('legacySettingsDocumentOf', () => {
+  test('keeps a copy of the keybinding overrides for older builds', () => {
+    const legacy = legacySettingsDocumentOf(
+      { opencodeBinary: '/bin/oc', [KEYBINDINGS_SETTINGS_KEY]: { new_chat: 'mod+n' } },
+      { themeId: { value: 'nord', updatedAt: 1 } },
+    );
+    assert.deepEqual(legacy, {
+      opencodeBinary: '/bin/oc',
+      themeId: 'nord',
+      [KEYBINDINGS_SETTINGS_KEY]: { new_chat: 'mod+n' },
+    });
+  });
+
+  test('omits the keybinding copy when the document has no overrides', () => {
+    const legacy = legacySettingsDocumentOf({ opencodeBinary: '/bin/oc' }, {});
+    assert.deepEqual(legacy, { opencodeBinary: '/bin/oc' });
+  });
 });
 
 describe('instancePartOf', () => {
@@ -102,6 +136,41 @@ describe('scope helpers', () => {
 
   test('preferences.json sits beside settings.json', () => {
     assert.equal(preferencesFilePathFor('/home/u/.config/openchamber/settings.json'), '/home/u/.config/openchamber/preferences.json');
+  });
+
+  test('keybindings.json sits beside settings.json', () => {
+    assert.equal(keybindingsFilePathFor('/home/u/.config/openchamber/settings.json'), '/home/u/.config/openchamber/keybindings.json');
+  });
+});
+
+describe('parseKeybindingsDocument', () => {
+  test('rejects invalid JSON', () => {
+    const result = parseKeybindingsDocument('{ not json');
+    assert.equal(result.ok, false);
+    assert.ok(!result.ok && result.reason.startsWith('invalid JSON'));
+  });
+
+  test('rejects a non-object document', () => {
+    assert.equal(parseKeybindingsDocument('[]').ok, false);
+    assert.equal(parseKeybindingsDocument('"mod+n"').ok, false);
+  });
+
+  test('accepts a document whose binding value is not a string (entry values are sanitized later)', () => {
+    assert.deepEqual(parseKeybindingsDocument(JSON.stringify({ new_chat: 1 })), { ok: true, overrides: { new_chat: 1 } });
+  });
+
+  test('accepts an empty document and a plain string map', () => {
+    assert.deepEqual(parseKeybindingsDocument('{}'), { ok: true, overrides: {} });
+    assert.deepEqual(
+      parseKeybindingsDocument(JSON.stringify({ new_chat: 'mod+n', toggle_sidebar: '__unassigned__' })),
+      { ok: true, overrides: { new_chat: 'mod+n', toggle_sidebar: '__unassigned__' } },
+    );
+  });
+
+  test('serializes a map and round-trips it', () => {
+    const text = serializeKeybindingsDocument({ new_chat: 'mod+n' });
+    assert.deepEqual(parseKeybindingsDocument(text), { ok: true, overrides: { new_chat: 'mod+n' } });
+    assert.equal(serializeKeybindingsDocument(null), '{}');
   });
 });
 

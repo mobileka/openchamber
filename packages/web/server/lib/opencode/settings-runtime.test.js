@@ -45,7 +45,8 @@ describe('settings runtime', () => {
       for (const sessionRetentionOnlyArchived of [true, false]) {
         const settings = { sessionRetentionOnlyArchived, sessionRetentionAction: 'delete', autoDeleteAfterDays: 30 };
         await runtime.persistSettings(settings);
-        expect(await runtime.readSettingsFromDisk()).toEqual(settings);
+        // The merged read also carries the authoritative (empty) keybinding map.
+        expect(await runtime.readSettingsFromDisk()).toEqual({ ...settings, shortcutOverrides: {} });
         expect(JSON.parse(await fsPromises.readFile(settingsFilePath, 'utf8'))).toEqual(settings);
       }
     } finally {
@@ -93,7 +94,8 @@ describe('settings runtime', () => {
     try {
       await runtime.persistSettings(preferences);
 
-      await expect(runtime.readSettingsFromDisk()).resolves.toEqual(preferences);
+      // The merged read also carries the authoritative (empty) keybinding map.
+      expect(await runtime.readSettingsFromDisk()).toEqual({ ...preferences, shortcutOverrides: {} });
       // Profile keys live in preferences.json; settings.json keeps a legacy copy for older builds.
       expect(JSON.parse(await fsPromises.readFile(settingsFilePath, 'utf8'))).toEqual(preferences);
       const stored = JSON.parse(await fsPromises.readFile(path.join(tempRoot, 'preferences.json'), 'utf8'));
@@ -346,10 +348,12 @@ describe('settings runtime', () => {
       const settingsDir = path.dirname(settingsFilePath);
       const orphan1 = path.join(settingsDir, 'settings.json.tmp-1234-11111-abc');
       const orphan2 = path.join(settingsDir, 'settings.json.tmp-5678-22222-def');
+      const orphan3 = path.join(settingsDir, 'keybindings.json.tmp-9012-33333-ghi');
       const unrelated = path.join(settingsDir, 'other-file.json');
 
       await fsPromises.writeFile(orphan1, '{"broken": true}', 'utf8');
       await fsPromises.writeFile(orphan2, '{"broken": true}', 'utf8');
+      await fsPromises.writeFile(orphan3, '{"broken": true}', 'utf8');
       await fsPromises.writeFile(unrelated, '{"keep": true}', 'utf8');
       await fsPromises.writeFile(settingsFilePath, '{"theme": "light"}', 'utf8');
 
@@ -360,6 +364,7 @@ describe('settings runtime', () => {
       expect(files).toContain('other-file.json');
       expect(files).not.toContain('settings.json.tmp-1234-11111-abc');
       expect(files).not.toContain('settings.json.tmp-5678-22222-def');
+      expect(files).not.toContain('keybindings.json.tmp-9012-33333-ghi');
     } finally {
       await cleanup();
     }
@@ -478,7 +483,10 @@ describe('settings runtime: preferences.json split', () => {
       await fsPromises.writeFile(settingsFilePath, JSON.stringify({ desktopLanAccessEnabled: true }));
       await fsPromises.writeFile(preferencesPath, '{ not json');
 
-      expect(await runtime.readSettingsFromDisk()).toEqual({ desktopLanAccessEnabled: true });
+      expect(await runtime.readSettingsFromDisk()).toEqual({
+        desktopLanAccessEnabled: true,
+        shortcutOverrides: {},
+      });
 
       await runtime.persistSettings({ fontSize: 130, desktopKeepAwakeEnabled: true });
 
@@ -488,6 +496,129 @@ describe('settings runtime: preferences.json split', () => {
       // The refused profile write must not land in the legacy copy either.
       expect(settings).not.toHaveProperty('fontSize');
     } finally {
+      await cleanup();
+    }
+  });
+});
+
+describe('settings runtime: keybindings.json split', () => {
+  const readJson = async (filePath) => JSON.parse(await fsPromises.readFile(filePath, 'utf8'));
+
+  it('seeds keybindings.json from the legacy override value once, then trusts the file', async () => {
+    const { runtime, settingsFilePath, tempRoot, cleanup } = await createRuntime();
+    try {
+      // A pre-split install: the overrides still sit in preferences.json.
+      await fsPromises.writeFile(settingsFilePath, JSON.stringify({ desktopLanAccessEnabled: true }));
+      await fsPromises.writeFile(path.join(tempRoot, 'preferences.json'), JSON.stringify({
+        version: 1,
+        fields: {
+          fontSize: { value: 100, updatedAt: 1 },
+          shortcutOverrides: { value: { new_chat: 'mod+n' }, updatedAt: 1 },
+        },
+      }));
+
+      const merged = await runtime.readSettingsFromDisk();
+      expect(merged.shortcutOverrides).toEqual({ new_chat: 'mod+n' });
+      expect(merged.fontSize).toBe(100);
+      expect(await readJson(path.join(tempRoot, 'keybindings.json'))).toEqual({ new_chat: 'mod+n' });
+
+      // The file is authoritative: a legacy copy does not shadow it.
+      await fsPromises.writeFile(settingsFilePath, JSON.stringify({
+        desktopLanAccessEnabled: true,
+        shortcutOverrides: { new_chat: 'mod+k' },
+      }));
+      expect((await runtime.readSettingsFromDisk()).shortcutOverrides).toEqual({ new_chat: 'mod+n' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('seeds an empty keybindings.json on a fresh install and serves an explicit empty map', async () => {
+    const { runtime, tempRoot, cleanup } = await createRuntime();
+    try {
+      const merged = await runtime.readSettingsFromDisk();
+      expect(merged.shortcutOverrides).toEqual({});
+      expect(await readJson(path.join(tempRoot, 'keybindings.json'))).toEqual({});
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('routes overrides to keybindings.json, out of preferences.json, into the settings.json legacy copy', async () => {
+    const { runtime, settingsFilePath, tempRoot, cleanup } = await createRuntime();
+    try {
+      await runtime.persistSettings({ shortcutOverrides: { new_chat: 'mod+shift+n' }, fontSize: 120 });
+
+      expect(await readJson(path.join(tempRoot, 'keybindings.json'))).toEqual({ new_chat: 'mod+shift+n' });
+      const preferences = await readJson(path.join(tempRoot, 'preferences.json'));
+      expect(preferences.fields).toHaveProperty('fontSize');
+      expect(preferences.fields).not.toHaveProperty('shortcutOverrides');
+      // Older builds read only settings.json: the legacy copy still carries it.
+      expect((await readJson(settingsFilePath)).shortcutOverrides).toEqual({ new_chat: 'mod+shift+n' });
+      expect((await runtime.readSettingsFromDisk()).shortcutOverrides).toEqual({ new_chat: 'mod+shift+n' });
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('writes an explicit empty map when all overrides are reset', async () => {
+    const { runtime, tempRoot, cleanup } = await createRuntime();
+    try {
+      await runtime.persistSettings({ shortcutOverrides: { new_chat: 'mod+n' } });
+      await runtime.persistSettings({ shortcutOverrides: {} });
+
+      expect(await readJson(path.join(tempRoot, 'keybindings.json'))).toEqual({});
+      // An explicit empty map reaches clients as authoritative, not as "unset".
+      expect((await runtime.readSettingsFromDisk()).shortcutOverrides).toEqual({});
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('treats a malformed keybindings.json as failure: key withheld, file untouched, keybinding writes refused', async () => {
+    const { runtime, settingsFilePath, tempRoot, cleanup } = await createRuntime();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const keybindingsPath = path.join(tempRoot, 'keybindings.json');
+      await fsPromises.writeFile(keybindingsPath, '{ not json');
+      await fsPromises.writeFile(settingsFilePath, JSON.stringify({
+        shortcutOverrides: { new_chat: 'mod+n' },
+        desktopLanAccessEnabled: true,
+      }));
+
+      // A corrupt file is not an empty override set: the stale legacy value is
+      // withheld so connected clients keep what they hold.
+      const merged = await runtime.readSettingsFromDisk();
+      expect(merged).not.toHaveProperty('shortcutOverrides');
+      expect(merged.desktopLanAccessEnabled).toBe(true);
+
+      await runtime.persistSettings({ shortcutOverrides: { new_chat: 'mod+k' }, fontSize: 100 });
+
+      expect(await fsPromises.readFile(keybindingsPath, 'utf8')).toBe('{ not json');
+      const after = await runtime.readSettingsFromDisk();
+      expect(after).not.toHaveProperty('shortcutOverrides');
+      // The unrelated profile write still landed.
+      expect(after.fontSize).toBe(100);
+    } finally {
+      warn.mockRestore();
+      await cleanup();
+    }
+  });
+
+  it('keeps keybinding writes independent from a corrupt preferences.json', async () => {
+    const { runtime, tempRoot, cleanup } = await createRuntime();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const preferencesPath = path.join(tempRoot, 'preferences.json');
+      await fsPromises.writeFile(preferencesPath, '{ not json');
+
+      await runtime.persistSettings({ shortcutOverrides: { new_chat: 'mod+n' } });
+
+      expect(await readJson(path.join(tempRoot, 'keybindings.json'))).toEqual({ new_chat: 'mod+n' });
+      expect(await fsPromises.readFile(preferencesPath, 'utf8')).toBe('{ not json');
+      expect((await runtime.readSettingsFromDisk()).shortcutOverrides).toEqual({ new_chat: 'mod+n' });
+    } finally {
+      warn.mockRestore();
       await cleanup();
     }
   });
