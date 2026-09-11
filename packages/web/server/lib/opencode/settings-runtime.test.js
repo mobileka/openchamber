@@ -45,7 +45,8 @@ describe('settings runtime', () => {
       for (const sessionRetentionOnlyArchived of [true, false]) {
         const settings = { sessionRetentionOnlyArchived, sessionRetentionAction: 'delete', autoDeleteAfterDays: 30 };
         await runtime.persistSettings(settings);
-        expect(await runtime.readSettingsFromDisk()).toEqual(settings);
+        // The merged read also carries the authoritative (empty) keybinding map.
+        expect(await runtime.readSettingsFromDisk()).toEqual({ ...settings, shortcutOverrides: {} });
         expect(JSON.parse(await fsPromises.readFile(settingsFilePath, 'utf8'))).toEqual(settings);
       }
     } finally {
