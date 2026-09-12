@@ -27,6 +27,7 @@ interface UpdateDialogProps {
   error: string | null;
   onDownload: () => void;
   onRestart: () => void;
+  onApplyLocal: () => void;
   /** Runtime type to show different UI for desktop vs web */
   runtimeType?: 'desktop' | 'web' | 'vscode' | 'mobile' | null;
 }
@@ -121,6 +122,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
   error,
   onDownload,
   onRestart,
+  onApplyLocal,
   runtimeType = 'desktop',
 }) => {
   const { t } = useI18n();
@@ -366,7 +368,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
           )}
 
           {/* Desktop progress bar */}
-          {!isWebRuntime && !isMobileRuntime && downloading && (
+          {!isWebRuntime && !isMobileRuntime && downloading && info?.source !== 'local' && (
             <div className="space-y-2 mt-4">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">{t('updateDialog.status.downloadingPayload')}</span>
@@ -403,7 +405,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
 
           <div className="flex-1 flex justify-end">
             {/* Desktop Buttons */}
-            {!isWebRuntime && !isMobileRuntime && !downloaded && !downloading && (
+            {!isWebRuntime && !isMobileRuntime && info?.source !== 'local' && !downloaded && !downloading && (
               <button
                 onClick={onDownload}
                 className="flex items-center justify-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-[var(--primary-base)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity"
@@ -413,7 +415,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
               </button>
             )}
 
-            {!isWebRuntime && !isMobileRuntime && downloading && (
+            {!isWebRuntime && !isMobileRuntime && info?.source !== 'local' && downloading && (
               <button
                 disabled
                 className="flex items-center justify-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-[var(--primary-base)]/50 text-[var(--primary-foreground)] cursor-not-allowed"
@@ -423,13 +425,34 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
               </button>
             )}
 
-            {!isWebRuntime && !isMobileRuntime && downloaded && (
+            {!isWebRuntime && !isMobileRuntime && info?.source !== 'local' && downloaded && (
               <button
                 onClick={onRestart}
                 className="flex items-center justify-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-[var(--status-success)] text-white hover:opacity-90 transition-opacity"
               >
                 <Icon name="restart" className="h-4 w-4" />
                 {t('updateDialog.actions.restartToUpdate')}
+              </button>
+            )}
+
+            {/* Local build button: one click repoints /Applications and restarts */}
+            {!isWebRuntime && !isMobileRuntime && info?.source === 'local' && !downloading && (
+              <button
+                onClick={onApplyLocal}
+                className="flex items-center justify-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-[var(--primary-base)] text-[var(--primary-foreground)] hover:opacity-90 transition-opacity"
+              >
+                <Icon name="restart" className="h-4 w-4" />
+                {t('updateDialog.actions.update')}
+              </button>
+            )}
+
+            {!isWebRuntime && !isMobileRuntime && info?.source === 'local' && downloading && (
+              <button
+                disabled
+                className="flex items-center justify-center gap-2 px-5 py-2 rounded-md text-sm font-medium bg-[var(--primary-base)]/50 text-[var(--primary-foreground)] cursor-not-allowed"
+              >
+                <Icon name="loader" className="h-4 w-4 animate-spin" />
+                {t('updateDialog.status.updating')}
               </button>
             )}
 

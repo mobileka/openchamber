@@ -23,6 +23,14 @@ import { checkForDesktopUpdate } from './updater-check.mjs';
 import { resolveUpdaterChannel } from './updater-channel.mjs';
 import { resolveUpdaterFeed } from './updater-feed.mjs';
 import {
+  evaluateLocalUpdate,
+  readLocalUpdateNotes,
+  readLocalUpdateState,
+  repointApplicationsLink,
+  resolveBuildsDir,
+  STATE_FILE_NAME,
+} from './local-update.mjs';
+import {
   buildLinuxInstalledApps,
   buildLinuxOpenSpecs,
   fetchLinuxAppIcons,
@@ -212,16 +220,30 @@ const readAppMetadata = () => {
       const raw = fs.readFileSync(candidate, 'utf8');
       const parsed = JSON.parse(raw);
       if (parsed?.name === '@openchamber/electron' && typeof parsed.version === 'string') {
-        return { name: parsed.name, version: parsed.version };
+        return {
+          name: parsed.name,
+          version: parsed.version,
+          buildSha: typeof parsed.buildSha === 'string' ? parsed.buildSha : null,
+          builtAt: typeof parsed.builtAt === 'string' ? parsed.builtAt : null,
+        };
       }
     } catch {
     }
   }
-  return { name: '@openchamber/electron', version: app.getVersion() };
+  return { name: '@openchamber/electron', version: app.getVersion(), buildSha: null, builtAt: null };
 };
 
 const APP_METADATA = readAppMetadata();
 const APP_VERSION = APP_METADATA.version;
+
+// Locally built desktop apps carry their commit; stock releases do not. Fork
+// builds update only from the local builds/ channel, so an official release
+// can never silently replace fork changes.
+const LOCAL_UPDATE_ENABLED = app.isPackaged
+  && process.platform === 'darwin'
+  && typeof APP_METADATA.buildSha === 'string'
+  && /^[0-9a-f]{7,40}$/i.test(APP_METADATA.buildSha);
+const LOCAL_UPDATE_EXECUTABLE = '/Applications/OpenChamber.app/Contents/MacOS/OpenChamber';
 
 const DEFAULT_DESKTOP_PORT = 57123;
 const LOOPBACK_BIND_HOST = '127.0.0.1';
@@ -275,6 +297,9 @@ const state = {
   sshShutdownPromise: null,
   installingUpdate: false,
   pendingUpdate: null,
+  pendingLocalUpdate: null,
+  localUpdateStateSignature: null,
+  localUpdateTimer: null,
   unreachableHosts: new Set(),
   windowCounter: 1,
   focusedWindowIds: new Set(),
@@ -2340,6 +2365,31 @@ const dispatchCheckForUpdates = () => {
   for (const browserWindow of BrowserWindow.getAllWindows()) {
     dispatchDomEventToWindow(browserWindow, 'openchamber:check-for-updates');
   }
+};
+
+const localUpdateBuildsDir = () => resolveBuildsDir({ environment: process.env });
+
+const readLocalUpdateStateSignature = () => {
+  try {
+    const stats = fs.statSync(path.join(localUpdateBuildsDir(), STATE_FILE_NAME));
+    return `${stats.mtimeMs}:${stats.size}`;
+  } catch {
+    return '';
+  }
+};
+
+// A cheap disk check every five seconds. state.json only changes when a build
+// finishes, so a changed signature means the update check should run again.
+const startLocalUpdatePolling = () => {
+  if (!LOCAL_UPDATE_ENABLED) return;
+  state.localUpdateStateSignature = readLocalUpdateStateSignature();
+  state.localUpdateTimer = setInterval(() => {
+    const signature = readLocalUpdateStateSignature();
+    if (signature === state.localUpdateStateSignature) return;
+    state.localUpdateStateSignature = signature;
+    log.info('[electron] local update state changed; re-checking');
+    dispatchCheckForUpdates();
+  }, 5000);
 };
 
 const reloadMenuTargetWindow = () => {
@@ -4461,6 +4511,28 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
     case 'desktop_check_for_updates': {
       assertUpdaterCapability({ packaged: app.isPackaged });
       const currentVersion = APP_VERSION;
+      if (LOCAL_UPDATE_ENABLED) {
+        const localState = readLocalUpdateState({ buildsDir: localUpdateBuildsDir() });
+        const localUpdate = evaluateLocalUpdate({
+          state: localState,
+          runningCommit: APP_METADATA.buildSha,
+          runningBuiltAt: APP_METADATA.builtAt,
+        });
+        state.pendingLocalUpdate = localUpdate
+          ? {
+            ...localUpdate,
+            notes: readLocalUpdateNotes({ folderPath: path.dirname(localUpdate.appPath) }),
+          }
+          : null;
+        return {
+          available: Boolean(localUpdate),
+          currentVersion,
+          version: localUpdate?.version || null,
+          body: state.pendingLocalUpdate?.notes || null,
+          date: localUpdate?.builtAt || null,
+          source: 'local',
+        };
+      }
       const { available, updateInfo, updateResult, nextVersion, pendingUpdate } = await checkForDesktopUpdate({
         autoUpdater,
         currentVersion,
@@ -4479,6 +4551,7 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         date:
           (typeof updateInfo?.releaseDate === 'string' && updateInfo.releaseDate) ||
           null,
+        source: 'remote',
       };
     }
 
@@ -4537,6 +4610,35 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       } finally {
         setTaskbarProgress(-1);
       }
+
+    case 'desktop_apply_local_update': {
+      if (!LOCAL_UPDATE_ENABLED) {
+        throw new Error('Local updates are only available in locally built desktop apps');
+      }
+      const buildsDir = localUpdateBuildsDir();
+      const localUpdate = evaluateLocalUpdate({
+        state: readLocalUpdateState({ buildsDir }),
+        runningCommit: APP_METADATA.buildSha,
+        runningBuiltAt: APP_METADATA.builtAt,
+      });
+      if (!localUpdate) {
+        throw new Error('No local update is pending');
+      }
+      const changed = repointApplicationsLink({ target: localUpdate.appPath });
+      log.info(`[electron] local update applied version=${localUpdate.version} commit=${localUpdate.commit} changed=${changed}`);
+      // Defer so the IPC reply flushes before the app starts shutting down.
+      setImmediate(() => {
+        try {
+          prepareForQuit();
+          app.relaunch({ execPath: LOCAL_UPDATE_EXECUTABLE });
+          app.exit(0);
+        } catch (error) {
+          log.error('[electron] local update relaunch failed', error);
+          app.exit(1);
+        }
+      });
+      return { applying: true };
+    }
 
     case 'desktop_restart': {
       const applyUpdate = Boolean(state.pendingUpdate?.downloaded && app.isPackaged);
@@ -5479,6 +5581,7 @@ app.whenReady().then(async () => {
   registerPackagedUiProtocol();
   hardenBrowserPanelSession();
   setupAutoUpdater();
+  startLocalUpdatePolling();
 
   if (process.platform === 'darwin') {
     Menu.setApplicationMenu(buildMacMenu());

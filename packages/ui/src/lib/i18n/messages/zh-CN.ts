@@ -3076,6 +3076,7 @@ export const dict: Record<I18nKey, string> = {
   'updateDialog.actions.downloadUpdate': '下载更新',
   'updateDialog.status.downloading': '下载中...',
   'updateDialog.actions.restartToUpdate': '重启以更新',
+  'updateDialog.actions.update': 'Update',
   'updateDialog.actions.updateNow': '立即更新',
   'updateDialog.actions.openMobileUpdate': '打开更新',
   'updateDialog.status.updating': '更新中...',

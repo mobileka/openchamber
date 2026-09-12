@@ -3033,6 +3033,7 @@ export const dict = {
   'updateDialog.actions.downloadUpdate': 'Güncellemeyi İndir',
   'updateDialog.status.downloading': 'İndiriliyor...',
   'updateDialog.actions.restartToUpdate': 'Güncellemek İçin Yeniden Başlat',
+  'updateDialog.actions.update': 'Update',
   'updateDialog.actions.updateNow': 'Şimdi Güncelle',
   'updateDialog.actions.openMobileUpdate': 'Güncellemeyi aç',
   'updateDialog.status.updating': 'Güncelleniyor...',

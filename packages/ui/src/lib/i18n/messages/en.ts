@@ -3110,6 +3110,7 @@ export const dict = {
   'updateDialog.actions.downloadUpdate': 'Download Update',
   'updateDialog.status.downloading': 'Downloading...',
   'updateDialog.actions.restartToUpdate': 'Restart to Update',
+  'updateDialog.actions.update': 'Update',
   'updateDialog.actions.updateNow': 'Update Now',
   'updateDialog.actions.openMobileUpdate': 'Open update',
   'updateDialog.status.updating': 'Updating...',

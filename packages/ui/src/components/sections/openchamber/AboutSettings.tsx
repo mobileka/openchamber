@@ -44,6 +44,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
     checkForUpdates: s.checkForUpdates,
     downloadUpdate: s.downloadUpdate,
     restartToUpdate: s.restartToUpdate,
+    applyLocalUpdate: s.applyLocalUpdate,
   })));
   const { isMobile } = useDeviceInfo();
 
@@ -222,6 +223,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
           error={updateStore.error}
           onDownload={updateStore.downloadUpdate}
           onRestart={updateStore.restartToUpdate}
+          onApplyLocal={updateStore.applyLocalUpdate}
           runtimeType={updateStore.runtimeType}
         />
       </div>
@@ -318,6 +320,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
         error={updateStore.error}
         onDownload={updateStore.downloadUpdate}
         onRestart={updateStore.restartToUpdate}
+        onApplyLocal={updateStore.applyLocalUpdate}
         runtimeType={updateStore.runtimeType}
       />
     </SettingsSection>
