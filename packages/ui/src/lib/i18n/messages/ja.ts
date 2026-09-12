@@ -3106,6 +3106,7 @@ export const dict: Record<I18nKey, string> = {
   'updateDialog.actions.downloadUpdate': '更新をダウンロード',
   'updateDialog.status.downloading': 'ダウンロード中...',
   'updateDialog.actions.restartToUpdate': '再起動して更新',
+  'updateDialog.actions.update': 'Update',
   'updateDialog.actions.updateNow': '今すぐ更新',
   'updateDialog.actions.openMobileUpdate': '更新を開く',
   'updateDialog.status.updating': '更新中...',

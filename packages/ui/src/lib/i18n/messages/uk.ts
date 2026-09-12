@@ -3076,6 +3076,7 @@ export const dict: Record<I18nKey, string> = {
   "updateDialog.actions.downloadUpdate": "Завантажити оновлення",
   "updateDialog.status.downloading": "Завантаження...",
   "updateDialog.actions.restartToUpdate": "Перезапустити, щоб оновити",
+  "updateDialog.actions.update": "Update",
   "updateDialog.actions.updateNow": "Оновити зараз",
   "updateDialog.actions.openMobileUpdate": "Відкрити оновлення",
   "updateDialog.status.updating": "Оновлення...",

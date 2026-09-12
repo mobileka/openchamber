@@ -3,6 +3,7 @@ import type { UpdateInfo, UpdateProgress } from '@/lib/desktop';
 import { getDeviceInfo } from '@/lib/device';
 import { useUIStore } from './useUIStore';
 import {
+  applyLocalUpdate as applyLocalUpdateBridge,
   checkForDesktopUpdates,
   downloadDesktopUpdate,
   restartToApplyUpdate,
@@ -35,6 +36,7 @@ interface UpdateStore extends UpdateState {
   checkForUpdates: () => Promise<number | null>;
   downloadUpdate: () => Promise<void>;
   restartToUpdate: () => Promise<void>;
+  applyLocalUpdate: () => Promise<void>;
   dismiss: () => void;
   reset: () => void;
 }
@@ -328,6 +330,27 @@ export const useUpdateStore = create<UpdateStore>()((set, get) => ({
       // Keep the real installer failure; the dialog shows it and the button
       // stays clickable for another attempt.
       set({ error: getUpdateInstallErrorMessage(error instanceof Error ? error : new Error(String(error))) });
+    }
+  },
+
+  applyLocalUpdate: async () => {
+    const { available, info, runtimeType } = get();
+
+    if (runtimeType !== 'desktop' || !available || info?.source !== 'local') {
+      return;
+    }
+
+    set({ downloading: true, error: null });
+
+    try {
+      await applyLocalUpdateBridge();
+      // On success the main process repoints /Applications and relaunches, so
+      // this app goes away before any follow-up state could matter.
+    } catch (error) {
+      set({
+        downloading: false,
+        error: getUpdateInstallErrorMessage(error instanceof Error ? error : new Error(String(error))),
+      });
     }
   },
 

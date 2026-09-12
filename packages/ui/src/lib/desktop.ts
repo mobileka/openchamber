@@ -14,6 +14,8 @@ export type UpdateInfo = {
   releaseUrl?: string;
   downloadUrl?: string;
   nextSuggestedCheckInSec?: number;
+  /** Where the update comes from: local builds/ channel or the remote release feed. */
+  source?: 'local' | 'remote';
   // Web-specific fields
   packageManager?: string;
   updateCommand?: string;
@@ -624,6 +626,17 @@ export const restartToApplyUpdate = async (): Promise<boolean> => {
   // updater session) must reach the update dialog instead of being reduced to
   // a boolean the caller cannot explain.
   await invokeDesktop('desktop_restart');
+  return true;
+};
+
+export const applyLocalUpdate = async (): Promise<boolean> => {
+  if (!hasDesktopInvoke()) {
+    return false;
+  }
+
+  // The main process repoints the /Applications symlink and relaunches, so a
+  // successful call never returns in a running app; failures surface here.
+  await invokeDesktop('desktop_apply_local_update');
   return true;
 };
 
