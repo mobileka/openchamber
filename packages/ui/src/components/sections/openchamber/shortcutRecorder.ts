@@ -4,6 +4,7 @@ import {
   resolveShortcutEventKey,
   type ShortcutCombo,
 } from '@/lib/shortcuts';
+import { isMacOS } from '@/lib/utils';
 
 const MODIFIER_KEYS = new Set(['shift', 'control', 'alt', 'meta']);
 const MAX_SHORTCUT_KEY_COUNT = 3;
@@ -45,39 +46,44 @@ function getPhysicalKeyCount(
   return keys.size;
 }
 
-function getModifierPreview(event: RecordingKeyboardEvent): ShortcutCombo | null {
+function modifierTokensForEvent(
+  event: Pick<RecordingKeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>,
+  isMac: boolean,
+  releasedKey?: string,
+): string[] {
+  const tokens = new Set<string>();
+  if (event.metaKey || releasedKey === 'meta') tokens.add('mod');
+  if (event.ctrlKey || releasedKey === 'control') tokens.add(isMac ? 'ctrl' : 'mod');
+  if (event.shiftKey || releasedKey === 'shift') tokens.add('shift');
+  if (event.altKey || releasedKey === 'alt') tokens.add('alt');
+  return [...tokens];
+}
+
+function getModifierPreview(event: RecordingKeyboardEvent, isMac: boolean): ShortcutCombo | null {
   if (getPhysicalKeyCount(event) > MAX_SHORTCUT_KEY_COUNT) return null;
-  const parts: string[] = [];
-  if (event.metaKey || event.ctrlKey) parts.push('mod');
-  if (event.shiftKey) parts.push('shift');
-  if (event.altKey) parts.push('alt');
+  const parts = modifierTokensForEvent(event, isMac);
   return parts.length > 0 ? normalizeCombo(parts.join('+')) : null;
 }
 
-function keyboardEventToCombo(event: RecordingKeyboardEvent): ShortcutCombo | null {
+function keyboardEventToCombo(event: RecordingKeyboardEvent, isMac: boolean): ShortcutCombo | null {
   if (MODIFIER_KEYS.has(event.key.toLowerCase())) return null;
   if (getPhysicalKeyCount(event, true) > MAX_SHORTCUT_KEY_COUNT) return null;
 
   const key = keyToShortcutToken(resolveShortcutEventKey(event));
   if (!key) return null;
 
-  const parts: string[] = [];
-  if (event.metaKey || event.ctrlKey) parts.push('mod');
-  if (event.shiftKey) parts.push('shift');
-  if (event.altKey) parts.push('alt');
-  parts.push(key);
-  return normalizeCombo(parts.join('+'));
+  return normalizeCombo([...modifierTokensForEvent(event, isMac), key].join('+'));
 }
 
-export function modifierKeyUpToCombo(event: RecordingKeyboardEvent): ShortcutCombo | null {
+export function modifierKeyUpToCombo(
+  event: RecordingKeyboardEvent,
+  isMac: boolean = isMacOS(),
+): ShortcutCombo | null {
   const key = event.key.toLowerCase();
   if (!MODIFIER_KEYS.has(key)) return null;
   if (getPhysicalKeyCount(event, true) > MAX_SHORTCUT_KEY_COUNT) return null;
 
-  const parts: string[] = [];
-  if (event.metaKey || event.ctrlKey || key === 'meta' || key === 'control') parts.push('mod');
-  if (event.shiftKey || key === 'shift') parts.push('shift');
-  if (event.altKey || key === 'alt') parts.push('alt');
+  const parts = modifierTokensForEvent(event, isMac, key);
   return parts.length > 0 ? normalizeCombo(parts.join('+')) : null;
 }
 
@@ -89,17 +95,18 @@ export function updateShortcutRecordingState(
   state: ShortcutRecordingState,
   event: RecordingKeyboardEvent,
   phase: 'keydown' | 'keyup',
+  isMac: boolean = isMacOS(),
 ): ShortcutRecordingState {
   if (event.repeat || event.isComposing) return state;
   if (phase === 'keyup') {
-    return { ...state, livePreview: getModifierPreview(event) };
+    return { ...state, livePreview: getModifierPreview(event, isMac) };
   }
 
   if (event.key === 'Backspace') {
     return { chords: state.chords.slice(0, -1), livePreview: null, settled: false };
   }
 
-  const chord = keyboardEventToCombo(event);
+  const chord = keyboardEventToCombo(event, isMac);
   if (chord) {
     if (state.settled) {
       return { chords: [chord], livePreview: null, settled: false };
@@ -112,5 +119,5 @@ export function updateShortcutRecordingState(
     };
   }
 
-  return { ...state, livePreview: getModifierPreview(event) };
+  return { ...state, livePreview: getModifierPreview(event, isMac) };
 }
