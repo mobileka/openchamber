@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import {
   evaluateLocalUpdate,
-  readLocalUpdateNotes,
+  readLocalUpdateDetails,
   readLocalUpdateState,
   repointApplicationsLink,
   resolveBuildsDir,
@@ -22,6 +22,7 @@ const createBuild = (buildsDir, folder, entry = {}) => {
     commit: entry.commit ?? 'a'.repeat(40),
     builtAt: entry.builtAt ?? '2026-09-12T00:00:00.000Z',
     notes: entry.notes ?? '## [1.23.1] - 2026-09-12\n\n### Local changes\n\n- something',
+    localChanges: entry.localChanges ?? '',
   };
   fs.writeFileSync(path.join(buildsDir, folder, 'build.json'), JSON.stringify(build));
   return { appPath, build };
@@ -92,11 +93,30 @@ test('evaluateLocalUpdate offers newer builds and skips the running commit', () 
   assert.equal(evaluateLocalUpdate({ state: null }), null);
 });
 
-test('readLocalUpdateNotes returns the dialog markdown from build.json', () => {
+test('readLocalUpdateDetails separates upstream notes from local changes', () => {
   const buildsDir = makeTempDir();
-  const { appPath } = createBuild(buildsDir, '1.23.1_aaaaaaa', { notes: '## [1.23.1] - 2026-09-12' });
-  assert.equal(readLocalUpdateNotes({ folderPath: path.dirname(appPath) }), '## [1.23.1] - 2026-09-12');
-  assert.equal(readLocalUpdateNotes({ folderPath: path.join(buildsDir, 'nope') }), null);
+  const { appPath } = createBuild(buildsDir, '1.23.1_aaaaaaa', {
+    notes: '## [1.23.1] - 2026-09-12',
+    localChanges: '- thing (abc1234)',
+  });
+  assert.deepEqual(readLocalUpdateDetails({ folderPath: path.dirname(appPath) }), {
+    notes: '## [1.23.1] - 2026-09-12',
+    localChanges: '- thing (abc1234)',
+  });
+  assert.equal(readLocalUpdateDetails({ folderPath: path.join(buildsDir, 'nope') }), null);
+});
+
+test('readLocalUpdateDetails tolerates build files without a localChanges field', () => {
+  const buildsDir = makeTempDir();
+  const folderPath = path.join(buildsDir, '1.23.1_bbbbbbb');
+  fs.mkdirSync(path.join(folderPath, 'OpenChamber.app'), { recursive: true });
+  fs.writeFileSync(path.join(folderPath, 'build.json'), JSON.stringify({
+    notes: '## [1.23.1] - 2026-09-12\n\n### Local changes\n\n- old format (bbbbbbb)',
+  }));
+  assert.deepEqual(readLocalUpdateDetails({ folderPath }), {
+    notes: '## [1.23.1] - 2026-09-12\n\n### Local changes\n\n- old format (bbbbbbb)',
+    localChanges: null,
+  });
 });
 
 test('repointApplicationsLink swaps the symlink and restores it on failure', () => {

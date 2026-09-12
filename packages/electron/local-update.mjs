@@ -98,18 +98,22 @@ export const evaluateLocalUpdate = ({
   };
 };
 
-export const readLocalUpdateNotes = ({
+export const readLocalUpdateDetails = ({
   folderPath,
   readFile = fs.readFileSync,
 } = {}) => {
   const raw = readText(readFile, path.join(folderPath, BUILD_FILE_NAME));
   if (!raw) return null;
+  let parsed;
   try {
-    const parsed = JSON.parse(raw);
-    return typeof parsed?.notes === 'string' && parsed.notes.trim() ? parsed.notes.trim() : null;
+    parsed = JSON.parse(raw);
   } catch {
     return null;
   }
+  const notes = typeof parsed?.notes === 'string' && parsed.notes.trim() ? parsed.notes.trim() : null;
+  const localChanges = typeof parsed?.localChanges === 'string' && parsed.localChanges.trim() ? parsed.localChanges.trim() : null;
+  if (!notes && !localChanges) return null;
+  return { notes, localChanges };
 };
 
 export const repointApplicationsLink = ({

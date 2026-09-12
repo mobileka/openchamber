@@ -24,7 +24,7 @@ import { resolveUpdaterChannel } from './updater-channel.mjs';
 import { resolveUpdaterFeed } from './updater-feed.mjs';
 import {
   evaluateLocalUpdate,
-  readLocalUpdateNotes,
+  readLocalUpdateDetails,
   readLocalUpdateState,
   repointApplicationsLink,
   resolveBuildsDir,
@@ -4518,17 +4518,20 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
           runningCommit: APP_METADATA.buildSha,
           runningBuiltAt: APP_METADATA.builtAt,
         });
+        const details = localUpdate
+          ? readLocalUpdateDetails({ folderPath: path.dirname(localUpdate.appPath) })
+          : null;
         state.pendingLocalUpdate = localUpdate
-          ? {
-            ...localUpdate,
-            notes: readLocalUpdateNotes({ folderPath: path.dirname(localUpdate.appPath) }),
-          }
+          ? { ...localUpdate, notes: details?.notes ?? null, localChanges: details?.localChanges ?? null }
           : null;
         return {
           available: Boolean(localUpdate),
           currentVersion,
           version: localUpdate?.version || null,
-          body: state.pendingLocalUpdate?.notes || null,
+          body: details?.notes ?? null,
+          localChanges: details?.localChanges ?? null,
+          currentCommit: typeof APP_METADATA.buildSha === 'string' ? APP_METADATA.buildSha.slice(0, 7) : null,
+          targetCommit: localUpdate?.commit ? localUpdate.commit.slice(0, 7) : null,
           date: localUpdate?.builtAt || null,
           source: 'local',
         };

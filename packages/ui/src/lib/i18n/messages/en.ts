@@ -3112,6 +3112,7 @@ export const dict = {
   'updateDialog.actions.restartToUpdate': 'Restart to Update',
   'updateDialog.actions.update': 'Update',
   'updateDialog.actions.updateNow': 'Update Now',
+  'updateDialog.localChanges.title': 'Local changes',
   'updateDialog.actions.openMobileUpdate': 'Open update',
   'updateDialog.status.updating': 'Updating...',
   'updateDialog.error.updateFailed': 'Update failed',
