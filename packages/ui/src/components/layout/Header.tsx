@@ -1725,6 +1725,7 @@ export const Header: React.FC = () => {
         error={remoteUpdateError}
         onDownload={() => {}}
         onRestart={() => {}}
+        onApplyLocal={() => {}}
         runtimeType="web"
       />
     </>

@@ -167,6 +167,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
     checkForUpdates: s.checkForUpdates,
     downloadUpdate: s.downloadUpdate,
     restartToUpdate: s.restartToUpdate,
+    applyLocalUpdate: s.applyLocalUpdate,
   })));
   const { isMobile } = useDeviceInfo();
   // Native app: updates target the connected server; the app itself updates
@@ -461,6 +462,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
           error={update.error}
           onDownload={updateStore.downloadUpdate}
           onRestart={updateStore.restartToUpdate}
+          onApplyLocal={updateStore.applyLocalUpdate}
           runtimeType={update.runtimeType}
         />
       </div>
@@ -565,6 +567,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
         error={update.error}
         onDownload={updateStore.downloadUpdate}
         onRestart={updateStore.restartToUpdate}
+        onApplyLocal={updateStore.applyLocalUpdate}
         runtimeType={update.runtimeType}
       />
     </SettingsSection>

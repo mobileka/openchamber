@@ -192,6 +192,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     error: s.error,
     downloadUpdate: s.downloadUpdate,
     restartToUpdate: s.restartToUpdate,
+    applyLocalUpdate: s.applyLocalUpdate,
   })));
 
   const runtimeKey = getRuntimeKey();
@@ -743,6 +744,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         error={updateStore.error}
         onDownload={updateStore.downloadUpdate}
         onRestart={updateStore.restartToUpdate}
+        onApplyLocal={updateStore.applyLocalUpdate}
         runtimeType={updateStore.runtimeType}
       />
 
