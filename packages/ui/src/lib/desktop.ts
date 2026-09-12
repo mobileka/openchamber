@@ -16,6 +16,12 @@ export type UpdateInfo = {
   nextSuggestedCheckInSec?: number;
   /** Where the update comes from: local builds/ channel or the remote release feed. */
   source?: 'local' | 'remote';
+  /** Short commit of the running build, present for local updates. */
+  currentCommit?: string | null;
+  /** Short commit of the staged build, present for local updates. */
+  targetCommit?: string | null;
+  /** Markdown list of the local commits included in a staged build. */
+  localChanges?: string | null;
   // Web-specific fields
   packageManager?: string;
   updateCommand?: string;

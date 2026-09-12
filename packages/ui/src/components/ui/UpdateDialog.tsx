@@ -112,6 +112,13 @@ function parseChangelogSections(body: string): ChangelogSection[] {
   });
 }
 
+function formatBuildLabel(version?: string | null, commit?: string | null): string | null {
+  if (!version) {
+    return null;
+  }
+  return commit ? `${version}_${commit}` : version;
+}
+
 export const UpdateDialog: React.FC<UpdateDialogProps> = ({
   open,
   onOpenChange,
@@ -134,6 +141,9 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
     ? (info.releaseUrl || `${GITHUB_RELEASES_URL}/tag/v${info.version}`)
     : GITHUB_RELEASES_URL;
   const mobileUpdateUrl = info?.downloadUrl || releaseUrl;
+
+  const currentBuildLabel = formatBuildLabel(info?.currentVersion, info?.currentCommit);
+  const targetBuildLabel = formatBuildLabel(info?.version, info?.targetCommit);
 
   const progressPercent = progress?.total
     ? Math.round((progress.downloaded / progress.total) * 100)
@@ -245,16 +255,16 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
           </DialogTitle>
 
           {/* Version Diff */}
-          {(info?.currentVersion || info?.version) && (
+          {(currentBuildLabel || targetBuildLabel) && (
             <div className="flex items-center gap-2 font-mono text-sm ml-3">
-              {info?.currentVersion && (
-                <span className="text-muted-foreground">{info.currentVersion}</span>
+              {currentBuildLabel && (
+                <span className="text-muted-foreground">{currentBuildLabel}</span>
               )}
-              {info?.currentVersion && info?.version && (
+              {currentBuildLabel && targetBuildLabel && (
                 <span className="text-muted-foreground/50">→</span>
               )}
-              {info?.version && (
-                <span className="text-[var(--primary-base)] font-medium">{info.version}</span>
+              {targetBuildLabel && (
+                <span className="text-[var(--primary-base)] font-medium">{targetBuildLabel}</span>
               )}
             </div>
           )}
@@ -277,6 +287,21 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
               <p className="mt-2 text-xs text-muted-foreground">
                 {t('updateDialog.status.autoReloadHint')}
               </p>
+            </div>
+          )}
+
+          {/* Local changes first: these matter most for fork builds */}
+          {info?.source === 'local' && info.localChanges && !isWebUpdating && (
+            <div className="rounded-lg border border-[var(--primary-base)]/40 bg-[var(--primary-base)]/5 p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Icon name="git-commit" className="h-4 w-4 text-[var(--primary-base)]" />
+                <span className="typography-ui-label font-medium text-[var(--primary-base)]">
+                  {t('updateDialog.localChanges.title')}
+                </span>
+              </div>
+              <div className="typography-markdown-body text-foreground leading-relaxed break-words [&_a]:!text-[var(--primary-base)] [&_a]:!no-underline [&_a:hover]:!underline">
+                <SimpleMarkdownRenderer content={info.localChanges} disableLinkSafety={true} enableFileReferences={false} />
+              </div>
             </div>
           )}
 
