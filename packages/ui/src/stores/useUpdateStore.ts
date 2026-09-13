@@ -225,16 +225,33 @@ export const useUpdateStore = create<UpdateStore>()((set, get) => ({
           checkForWebUpdates('desktop', appVersion),
         ]);
         const desktopInfo = desktopResult.status === 'fulfilled' ? desktopResult.value : null;
+        // A rejected desktop check is authoritative failure, not "up to date";
+        // surface it so a manual check can explain what went wrong.
+        const desktopError = desktopResult.status === 'rejected'
+          ? (desktopResult.reason instanceof Error ? desktopResult.reason.message : 'Failed to check for updates')
+          : null;
         suggestedSec = apiResult.status === 'fulfilled'
           ? (apiResult.value?.nextSuggestedCheckInSec ?? null)
           : null;
-        set({
-          checking: false,
-          available: desktopInfo?.available ?? false,
-          info: desktopInfo,
-          lastChecked: Date.now(),
-          nextCheckInSec: suggestedSec,
-        });
+        if (desktopError) {
+          // A transient check failure must not erase an update that was already
+          // found; keep the previous result and surface the failure separately.
+          set({
+            checking: false,
+            error: desktopError,
+            lastChecked: Date.now(),
+            nextCheckInSec: suggestedSec,
+          });
+        } else {
+          set({
+            checking: false,
+            available: desktopInfo?.available ?? false,
+            info: desktopInfo,
+            error: null,
+            lastChecked: Date.now(),
+            nextCheckInSec: suggestedSec,
+          });
+        }
 
         return suggestedSec;
       } else if (runtime === 'web') {

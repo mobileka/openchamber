@@ -6,10 +6,12 @@ import test from 'node:test';
 
 import {
   evaluateLocalUpdate,
+  pruneLocalUpdateBuilds,
   readLocalUpdateDetails,
   readLocalUpdateState,
   repointApplicationsLink,
   resolveBuildsDir,
+  writeLocalUpdateState,
 } from './local-update.mjs';
 
 const makeTempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-local-update-'));
@@ -153,4 +155,56 @@ test('repointApplicationsLink swaps the symlink and restores it on failure', () 
   fs.rmSync(linkPath);
   fs.mkdirSync(linkPath);
   assert.throws(() => repointApplicationsLink({ target: newTarget, linkPath }), /not a symlink/);
+});
+
+test('writeLocalUpdateState round-trips a readable state with previous', () => {
+  const buildsDir = makeTempDir();
+  createBuild(buildsDir, '1.23.1_aaaaaaa', { commit: 'a'.repeat(40) });
+  createBuild(buildsDir, '1.23.0_bbbbbbb', { commit: 'b'.repeat(40) });
+
+  writeLocalUpdateState({
+    buildsDir,
+    latest: { folder: '1.23.1_aaaaaaa', commit: 'a'.repeat(40), version: '1.23.1', builtAt: '2026-09-13T10:00:00.000Z' },
+    previous: { folder: '1.23.0_bbbbbbb', commit: 'b'.repeat(40), version: '1.23.0', builtAt: '2026-09-12T10:00:00.000Z' },
+    updatedAt: '2026-09-13T10:00:00.000Z',
+  });
+
+  const state = readLocalUpdateState({ buildsDir });
+  assert.equal(state?.latest.folder, '1.23.1_aaaaaaa');
+  assert.equal(state?.latest.commit, 'a'.repeat(40));
+  assert.equal(state?.previous?.folder, '1.23.0_bbbbbbb');
+  assert.equal(state?.updatedAt, '2026-09-13T10:00:00.000Z');
+  assert.equal(fs.existsSync(path.join(buildsDir, 'state.json.tmp')), false);
+});
+
+test('writeLocalUpdateState rejects entries that cannot be loaded again', () => {
+  const buildsDir = makeTempDir();
+  assert.throws(
+    () => writeLocalUpdateState({ buildsDir, latest: { folder: '../escape', commit: 'a'.repeat(40) } }),
+    /Invalid local update entry/,
+  );
+  assert.throws(
+    () => writeLocalUpdateState({ buildsDir, latest: { folder: 'good_folder', commit: 'not-a-commit' } }),
+    /Invalid local update entry/,
+  );
+  assert.equal(fs.existsSync(path.join(buildsDir, 'state.json')), false);
+});
+
+test('pruneLocalUpdateBuilds removes unreferenced folders only', () => {
+  const buildsDir = makeTempDir();
+  for (const folder of ['1.23.1_aaaaaaa', '1.23.0_bbbbbbb', '1.22.0_ccccccc']) {
+    fs.mkdirSync(path.join(buildsDir, folder, 'OpenChamber.app'), { recursive: true });
+  }
+  fs.mkdirSync(path.join(buildsDir, '.staging-123'));
+  fs.writeFileSync(path.join(buildsDir, 'build.log'), 'log');
+
+  const removed = pruneLocalUpdateBuilds({
+    buildsDir,
+    keepFolders: ['1.23.1_aaaaaaa', null],
+  });
+
+  assert.deepEqual(removed.sort(), ['1.22.0_ccccccc', '1.23.0_bbbbbbb']);
+  assert.equal(fs.existsSync(path.join(buildsDir, '1.23.1_aaaaaaa')), true);
+  assert.equal(fs.existsSync(path.join(buildsDir, '.staging-123')), true);
+  assert.equal(fs.existsSync(path.join(buildsDir, 'build.log')), true);
 });
