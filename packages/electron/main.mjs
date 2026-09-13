@@ -31,6 +31,10 @@ import {
   STATE_FILE_NAME,
 } from './local-update.mjs';
 import {
+  resolveReleaseUpdate,
+  stageReleaseUpdate,
+} from './github-release-update.mjs';
+import {
   buildLinuxInstalledApps,
   buildLinuxOpenSpecs,
   fetchLinuxAppIcons,
@@ -297,6 +301,7 @@ const state = {
   sshShutdownPromise: null,
   installingUpdate: false,
   pendingUpdate: null,
+  pendingReleaseUpdate: null,
   pendingLocalUpdate: null,
   localUpdateStateSignature: null,
   localUpdateTimer: null,
@@ -3214,6 +3219,77 @@ const installDownloadedUpdate = () => new Promise((resolve, reject) => {
 
 const parseRelevantChangelogNotes = (fromVersion, toVersion) => fetchUpdateNotes(fromVersion, toVersion, compareSemver);
 
+// The running bundle resolves through /Applications/OpenChamber.app into the
+// builds folder that must survive pruning even when it is neither latest nor
+// previous.
+const resolveRunningBuildFolder = () => {
+  try {
+    const bundlePath = path.dirname(path.dirname(path.dirname(fs.realpathSync(process.execPath))));
+    return path.basename(path.dirname(bundlePath));
+  } catch {
+    return null;
+  }
+};
+
+const stagePendingReleaseUpdate = async () => {
+  const releaseUpdate = state.pendingReleaseUpdate;
+  if (!releaseUpdate) throw new Error('No pending update');
+  setTaskbarProgress(0.01);
+  emitToAllWindows('openchamber:update-progress', mapUpdaterProgressEvent({
+    event: 'Started',
+    data: { contentLength: releaseUpdate.size ?? null },
+  }));
+  try {
+    const freshUpdate = await resolveReleaseUpdate({ currentVersion: APP_VERSION });
+    if (!freshUpdate) throw new Error('The release update is no longer available');
+    const staged = await stageReleaseUpdate({
+      buildsDir: localUpdateBuildsDir(),
+      update: freshUpdate,
+      runningFolder: resolveRunningBuildFolder(),
+      onProgress: ({ downloaded, total }) => {
+        setTaskbarProgress(total > 0 ? Math.max(0, Math.min(1, downloaded / total)) : 0.01);
+        emitToAllWindows('openchamber:update-progress', mapUpdaterProgressEvent({
+          event: 'Progress',
+          data: { chunkLength: 0, downloaded, total },
+        }));
+      },
+    });
+    state.pendingReleaseUpdate = { ...freshUpdate, staged };
+    state.pendingUpdate = {
+      downloaded: true,
+      githubStaged: true,
+      version: staged.version,
+      commit: staged.commit,
+      appPath: staged.appPath,
+    };
+    emitToAllWindows('openchamber:update-progress', mapUpdaterProgressEvent({
+      event: 'Finished',
+      data: {},
+    }));
+    log.info(`[electron] staged release update version=${staged.version} commit=${staged.commit}`);
+    return null;
+  } finally {
+    setTaskbarProgress(-1);
+  }
+};
+
+const applyStagedAppUpdate = ({ appPath, version, commit }) => {
+  const changed = repointApplicationsLink({ target: appPath });
+  log.info(`[electron] staged update applied version=${version} commit=${commit} changed=${changed}`);
+  // Defer so the IPC reply flushes before the app starts shutting down.
+  setImmediate(() => {
+    try {
+      prepareForQuit();
+      app.relaunch({ execPath: LOCAL_UPDATE_EXECUTABLE });
+      app.exit(0);
+    } catch (error) {
+      log.error('[electron] staged update relaunch failed', error);
+      app.exit(1);
+    }
+  });
+  return { applying: true };
+};
+
 const buildInstalledAppsCachePath = () => path.join(path.dirname(settingsFilePath()), INSTALLED_APPS_CACHE_FILE);
 
 // Async variants. sips + mdfind via spawnSync blocked the Electron main event
@@ -4512,12 +4588,40 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       assertUpdaterCapability({ packaged: app.isPackaged });
       const currentVersion = APP_VERSION;
       if (LOCAL_UPDATE_ENABLED) {
-        const localState = readLocalUpdateState({ buildsDir: localUpdateBuildsDir() });
+        const buildsDir = localUpdateBuildsDir();
+        const localState = readLocalUpdateState({ buildsDir });
         const localUpdate = evaluateLocalUpdate({
           state: localState,
           runningCommit: APP_METADATA.buildSha,
           runningBuiltAt: APP_METADATA.builtAt,
         });
+        let releaseUpdate = null;
+        try {
+          releaseUpdate = await resolveReleaseUpdate({ currentVersion });
+        } catch (error) {
+          // A failed release check must not hide a freshly built local update;
+          // without that fallback the check fails loudly instead of reporting
+          // the app as up to date.
+          if (!localUpdate) {
+            const detail = error instanceof Error && error.message ? `: ${error.message}` : '';
+            throw new Error(`Unable to check for releases${detail}. Check your network connection and try again.`, { cause: error });
+          }
+          log.warn('[electron] release update check failed; falling back to the local build channel', error);
+        }
+        if (releaseUpdate) {
+          state.pendingReleaseUpdate = releaseUpdate;
+          state.pendingLocalUpdate = null;
+          return {
+            available: true,
+            currentVersion,
+            version: releaseUpdate.version,
+            body: releaseUpdate.body,
+            releaseUrl: releaseUpdate.releaseUrl,
+            date: releaseUpdate.date,
+            source: 'github',
+          };
+        }
+        state.pendingReleaseUpdate = null;
         const details = localUpdate
           ? readLocalUpdateDetails({ folderPath: path.dirname(localUpdate.appPath) })
           : null;
@@ -4560,6 +4664,9 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
 
     case 'desktop_download_and_install_update':
       assertUpdaterCapability({ packaged: app.isPackaged });
+      if (state.pendingReleaseUpdate) {
+        return await stagePendingReleaseUpdate();
+      }
       if (!state.pendingUpdate) {
         throw new Error('No pending update');
       }
@@ -4627,23 +4734,21 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
       if (!localUpdate) {
         throw new Error('No local update is pending');
       }
-      const changed = repointApplicationsLink({ target: localUpdate.appPath });
-      log.info(`[electron] local update applied version=${localUpdate.version} commit=${localUpdate.commit} changed=${changed}`);
-      // Defer so the IPC reply flushes before the app starts shutting down.
-      setImmediate(() => {
-        try {
-          prepareForQuit();
-          app.relaunch({ execPath: LOCAL_UPDATE_EXECUTABLE });
-          app.exit(0);
-        } catch (error) {
-          log.error('[electron] local update relaunch failed', error);
-          app.exit(1);
-        }
+      return applyStagedAppUpdate({
+        appPath: localUpdate.appPath,
+        version: localUpdate.version,
+        commit: localUpdate.commit,
       });
-      return { applying: true };
     }
 
     case 'desktop_restart': {
+      if (state.pendingUpdate?.githubStaged && app.isPackaged) {
+        return applyStagedAppUpdate({
+          appPath: state.pendingUpdate.appPath,
+          version: state.pendingUpdate.version,
+          commit: state.pendingUpdate.commit,
+        });
+      }
       const applyUpdate = Boolean(state.pendingUpdate?.downloaded && app.isPackaged);
       if (applyUpdate) assertUpdaterCapability({ packaged: app.isPackaged });
       log.info(`[electron] desktop_restart applyUpdate=${applyUpdate} packaged=${app.isPackaged}`);

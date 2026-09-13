@@ -23,6 +23,8 @@ The preload bridge exposes desktop-only APIs to the web UI through `window.__OPE
 | `host-probe-policy.mjs` | Selector fast attempt and unreachable-only retry policy |
 | `startup-url-selection.mjs` | Pure bundled/HMR startup probe and loopback connection-limit policy |
 | `preload.mjs` | Safe bridge from the rendered UI to Electron IPC |
+| `local-update.mjs` | Local builds/ channel state, evaluation, symlink apply, and atomic staging writes |
+| `github-release-update.mjs` | Fork GitHub release resolution, integrity-verified download, and builds-directory staging |
 | `ssh-manager.mjs` | SSH host import, connection lifecycle, tunnel/port forwarding helpers |
 | `scripts/electron-dev.mjs` | Desktop dev launcher with Vite HMR support |
 | `scripts/ensure-electron.mjs` | Verifies the installed Electron binary is complete and repairs it via the postinstall under Bun |
@@ -31,6 +33,7 @@ The preload bridge exposes desktop-only APIs to the web UI through `window.__OPE
 | `scripts/bundle-main.mjs` | Bundles Electron main code into `dist-bundle/main.mjs` for packaging |
 | `scripts/rebuild-native.mjs` | Rebuilds native modules against the Electron runtime |
 | `scripts/package.mjs` | Runs `electron-builder`, with unsigned Windows builds when signing env is missing |
+| `scripts/stage-release.mjs` | One-time bootstrap that stages the latest fork release for an app installed from local builds |
 | `resources/` | Packaged web assets, icons, and macOS entitlements |
 
 ## Development
@@ -124,6 +127,18 @@ Desktop clears AppImage `ARGV0` from `process.env` before probing the login shel
 Linux updates are supported only when the packaged app is running from a writable AppImage. Update checks, downloads, and installation report an actionable error when `APPIMAGE` is missing, invalid, or read-only; a missing release feed (`latest-linux.yml` 404 before the first Linux publish) is treated as “no update available”. Authenticated Web clients connected to the embedded Desktop Host use this same `electron-updater` check, download, and restart flow rather than a package-manager command. macOS and Windows updater behavior is unchanged. Release builds keep `latest-linux.yml` (x64) and `latest-linux-arm64.yml` separate and validate each manifest against its AppImage before upload. Linux AppImages download full updates (no `.blockmap` differential channel yet).
 
 `desktop_restart` does not answer the renderer before the install is decided. On the apply-update path it calls `quitAndInstall()` and keeps the IPC call open until the app quits or `autoUpdater` emits `error`, which the platform installers do asynchronously (a rejected code signature, or a Squirrel session disabled by an earlier failure). A failed install rejects the IPC call so the update dialog can show it, and the quit/install flags are rolled back because the app is staying up. A still-running app after the grace period resolves the call.
+
+### Personal Fork Release Channel
+
+The `personal` branch publishes unsigned macOS arm64 releases from `.github/workflows/personal-macos-release.yml` on every merge. Versions track the upstream base and add a fork suffix (`1.23.1-personal.3`, tag `v1.23.1-personal.3`), so they never reuse official release numbers or tags. The workflow stamps `version`, `buildSha`, and `builtAt` into `packages/electron/package.json` for the build, ad-hoc signs the bundle, and publishes `OpenChamber-<version>-mac-arm64.zip` with a `personal-release.json` manifest (`version`, `commit`, `builtAt`, `assetName`, `sha512`, `size`).
+
+Desktop apps with `buildSha` metadata check the fork's latest release on launch, every 30 minutes, and from the app menu and sidebar. A newer release is offered through the standard update dialog: **Download** fetches the zip, verifies it against the manifest sha512, extracts it into `builds/<version>_<commit>/`, and writes `state.json` and `build.json`; **Restart** repoints the `/Applications/OpenChamber.app` symlink and relaunches, reusing the local build channel's apply path.
+
+This channel exists because unsigned macOS builds cannot install through Squirrel.Mac: `electron-updater` validates the downloaded bundle against the installed app's designated requirement, and an ad-hoc signature pins one build's cdhash. Release checks therefore bypass `electron-updater` on fork builds; official builds and the other platforms keep the feed configured in `updater-feed.mjs`.
+
+An app that predates this channel only reads `builds/state.json`, so the first release needs one bootstrap step after the workflow publishes it: run `bun run --cwd packages/electron stage:release`. The script resolves the builds directory from the `/Applications` symlink, stages the latest release, and the running app offers it within five seconds. After that first apply, releases flow through the dialog.
+
+The custom path assumes `/Applications/OpenChamber.app` is a symlink into the builds directory, matching the local build setup; a real bundle in `/Applications` fails with an actionable error instead of being replaced in place.
 
 ### Updater End-to-End Fixture
 
