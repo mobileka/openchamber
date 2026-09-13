@@ -7,6 +7,7 @@ import test from 'node:test';
 import {
   evaluateLocalUpdate,
   pruneLocalUpdateBuilds,
+  pruneStaleStagingDirs,
   readLocalUpdateDetails,
   readLocalUpdateState,
   repointApplicationsLink,
@@ -207,4 +208,21 @@ test('pruneLocalUpdateBuilds removes unreferenced folders only', () => {
   assert.equal(fs.existsSync(path.join(buildsDir, '1.23.1_aaaaaaa')), true);
   assert.equal(fs.existsSync(path.join(buildsDir, '.staging-123')), true);
   assert.equal(fs.existsSync(path.join(buildsDir, 'build.log')), true);
+});
+
+test('pruneStaleStagingDirs removes old staging runs and keeps live ones', () => {
+  const buildsDir = makeTempDir();
+  const stale = path.join(buildsDir, '.staging-stale');
+  const fresh = path.join(buildsDir, '.staging-fresh');
+  fs.mkdirSync(stale);
+  fs.mkdirSync(fresh);
+  fs.mkdirSync(path.join(buildsDir, '1.23.1_aaaaaaa'));
+  const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+  fs.utimesSync(stale, twoDaysAgo, twoDaysAgo);
+
+  const removed = pruneStaleStagingDirs({ buildsDir });
+
+  assert.deepEqual(removed, ['.staging-stale']);
+  assert.equal(fs.existsSync(fresh), true);
+  assert.equal(fs.existsSync(path.join(buildsDir, '1.23.1_aaaaaaa')), true);
 });

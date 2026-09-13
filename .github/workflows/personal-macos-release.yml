@@ -57,13 +57,28 @@ jobs:
         run: |
           set -euo pipefail
           BASE_VERSION=$(node -p "require('./packages/electron/package.json').version.replace(/[-+].*$/, '')")
-          LATEST_TAG=$(curl -fsSL \
+          RELEASE_RESPONSE=$(mktemp)
+          HTTP_STATUS=$(curl -sSL -o "$RELEASE_RESPONSE" -w '%{http_code}' \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest" \
-            | node -e "let raw='';process.stdin.on('data',(chunk)=>raw+=chunk).on('end',()=>{try{const release=JSON.parse(raw);process.stdout.write(typeof release.tag_name==='string'?release.tag_name:'')}catch{process.stdout.write('')}})" \
-            || true)
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/latest")
+          if [ "$HTTP_STATUS" = "404" ]; then
+            LATEST_TAG=""
+          elif [ "$HTTP_STATUS" = "200" ]; then
+            LATEST_TAG=$(node -e "let raw='';process.stdin.on('data',(chunk)=>raw+=chunk).on('end',()=>{try{const release=JSON.parse(raw);process.stdout.write(typeof release.tag_name==='string'?release.tag_name:'')}catch{process.stdout.write('')}})" < "$RELEASE_RESPONSE")
+          else
+            echo "Failed to read the latest release (HTTP $HTTP_STATUS)" >&2
+            exit 1
+          fi
           VERSION=$(BASE_VERSION="$BASE_VERSION" LATEST_TAG="$LATEST_TAG" node packages/electron/scripts/personal-release-version.mjs)
+          TAG_STATUS=$(curl -sSL -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION")
+          if [ "$TAG_STATUS" != "404" ]; then
+            echo "Refusing to publish under an existing tag v$VERSION (HTTP $TAG_STATUS)" >&2
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Personal release version: $VERSION"
 

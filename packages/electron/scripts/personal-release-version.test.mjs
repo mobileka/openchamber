@@ -38,3 +38,9 @@ test('rejects a base version that is not plain x.y.z', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /BASE_VERSION must be a plain x\.y\.z version/);
 });
+
+test('rejects a latest tag that is not a personal release', () => {
+  const result = runExpectFailure({ BASE_VERSION: '1.23.1', LATEST_TAG: 'v1.23.1' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /LATEST_TAG is not a personal release/);
+});
