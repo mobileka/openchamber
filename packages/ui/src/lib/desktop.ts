@@ -14,8 +14,8 @@ export type UpdateInfo = {
   releaseUrl?: string;
   downloadUrl?: string;
   nextSuggestedCheckInSec?: number;
-  /** Where the update comes from: local builds/ channel or the remote release feed. */
-  source?: 'local' | 'remote';
+  /** Where the update comes from: local builds/ channel, remote release feed, or the fork's GitHub release channel. */
+  source?: 'local' | 'remote' | 'github';
   /** Short commit of the running build, present for local updates. */
   currentCommit?: string | null;
   /** Short commit of the staged build, present for local updates. */

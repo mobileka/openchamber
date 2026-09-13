@@ -1,5 +1,6 @@
 import React from 'react';
 
+import { isElectronShell } from '@/lib/desktop';
 import { useUpdateStore } from '@/stores/useUpdateStore';
 
 export function useUpdatePolling() {
@@ -13,6 +14,10 @@ export function useUpdatePolling() {
   React.useEffect(() => {
     const initialDelayMs = 3000;
     const defaultIntervalMs = 60 * 60 * 1000;
+    // Desktop releases are user-driven; a fixed 30-minute poll is deliberate
+    // and ignores the server-suggested interval used by web/mobile.
+    const desktopIntervalMs = 30 * 60 * 1000;
+    const desktopRuntime = isElectronShell();
     const minIntervalMs = 5 * 60 * 1000;
     const maxIntervalMs = 24 * 60 * 60 * 1000;
     let disposed = false;
@@ -27,9 +32,11 @@ export function useUpdatePolling() {
       if (disposed) return;
       timer = window.setTimeout(async () => {
         const suggestedSec = await checkForUpdatesRef.current();
-        const nextDelay = typeof suggestedSec === 'number' && Number.isFinite(suggestedSec)
-          ? clampIntervalMs(suggestedSec)
-          : defaultIntervalMs;
+        const nextDelay = desktopRuntime
+          ? desktopIntervalMs
+          : (typeof suggestedSec === 'number' && Number.isFinite(suggestedSec)
+            ? clampIntervalMs(suggestedSec)
+            : defaultIntervalMs);
         scheduleNext(nextDelay);
       }, delayMs);
     };

@@ -145,4 +145,62 @@ export const repointApplicationsLink = ({
   return true;
 };
 
+const serializeEntry = (entry) => {
+  const folder = typeof entry?.folder === 'string' ? entry.folder.trim() : '';
+  const commit = typeof entry?.commit === 'string' ? entry.commit.trim().toLowerCase() : '';
+  const version = typeof entry?.version === 'string' ? entry.version.trim() : '';
+  const builtAt = typeof entry?.builtAt === 'string' ? entry.builtAt.trim() : '';
+  if (!folder || !FOLDER_PATTERN.test(folder) || !COMMIT_PATTERN.test(commit)) {
+    throw new Error(`Invalid local update entry: ${JSON.stringify(entry)}`);
+  }
+  return { folder, commit, version, builtAt };
+};
+
+// Writes state.json atomically: the renderer polls the file signature, so a
+// partial write must never be observable.
+export const writeLocalUpdateState = ({
+  buildsDir,
+  latest,
+  previous = null,
+  updatedAt = new Date().toISOString(),
+  fsModule = fs,
+} = {}) => {
+  if (!buildsDir) throw new Error('buildsDir is required');
+  const payload = { latest: serializeEntry(latest), updatedAt };
+  if (previous) payload.previous = serializeEntry(previous);
+  fsModule.mkdirSync(buildsDir, { recursive: true });
+  const statePath = path.join(buildsDir, STATE_FILE_NAME);
+  const tempPath = `${statePath}.tmp`;
+  fsModule.writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+  fsModule.renameSync(tempPath, statePath);
+  return statePath;
+};
+
+// Build folders not referenced by state.json or the running app accumulate
+// whole app bundles, so keep only what the update flow can still reach.
+export const pruneLocalUpdateBuilds = ({
+  buildsDir,
+  keepFolders = [],
+  fsModule = fs,
+} = {}) => {
+  const keep = new Set(keepFolders.filter(Boolean));
+  const removed = [];
+  let entries;
+  try {
+    entries = fsModule.readdirSync(buildsDir, { withFileTypes: true });
+  } catch {
+    return removed;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !FOLDER_PATTERN.test(entry.name) || keep.has(entry.name)) continue;
+    try {
+      fsModule.rmSync(path.join(buildsDir, entry.name), { recursive: true, force: true });
+      removed.push(entry.name);
+    } catch {
+      // A build already removed by a concurrent prune is not an error.
+    }
+  }
+  return removed;
+};
+
 export { STATE_FILE_NAME };
