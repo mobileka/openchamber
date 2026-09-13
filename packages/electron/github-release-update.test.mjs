@@ -27,6 +27,8 @@ const jsonResponse = (payload, status = 200) => ({
 
 const makeTempDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-release-update-'));
 
+const isReleaseListUrl = (url) => url.includes('/releases?per_page=10');
+
 const buildReleasePayload = ({ version = '1.23.1-personal.1', body = 'Release notes', tag = null } = {}) => ({
   tag_name: tag || `v${version}`,
   body,
@@ -83,7 +85,7 @@ test('resolves a newer release with a verified manifest', async () => {
   const release = buildReleasePayload();
   const manifest = buildManifestPayload();
   const fetchImpl = async (url) => {
-    if (url.endsWith('/releases/latest')) return jsonResponse(release);
+    if (isReleaseListUrl(url)) return jsonResponse([release]);
     if (url.endsWith('personal-release.json')) return jsonResponse(manifest);
     throw new Error(`Unexpected URL: ${url}`);
   };
@@ -99,38 +101,42 @@ test('resolves a newer release with a verified manifest', async () => {
 });
 
 test('treats a repository without releases as no update', async () => {
-  const fetchImpl = async () => jsonResponse({}, 404);
+  const fetchImpl = async () => jsonResponse([]);
   assert.equal(await resolveReleaseUpdate({ currentVersion: '1.23.1', fetchImpl }), null);
 });
 
 test('does not offer releases that are not newer than the running version', async () => {
   const release = buildReleasePayload();
   const fetchImpl = async (url) => {
-    if (url.endsWith('/releases/latest')) return jsonResponse(release);
+    if (isReleaseListUrl(url)) return jsonResponse([release]);
     throw new Error(`Unexpected URL: ${url}`);
   };
   assert.equal(await resolveReleaseUpdate({ currentVersion: '1.23.2', fetchImpl }), null);
   assert.equal(await resolveReleaseUpdate({ currentVersion: '1.23.1-personal.9', fetchImpl }), null);
 });
 
-test('ignores releases that are not from the personal channel', async () => {
-  const release = buildReleasePayload({ version: '1.24.0', tag: 'v1.24.0' });
-  release.assets = [];
+test('skips releases that are not from the personal channel', async () => {
+  const official = buildReleasePayload({ version: '1.24.0', tag: 'v1.24.0' });
+  official.assets = [];
+  const personal = buildReleasePayload();
+  const manifest = buildManifestPayload();
   let requests = 0;
   const fetchImpl = async (url) => {
     requests += 1;
-    if (url.endsWith('/releases/latest')) return jsonResponse(release);
+    if (isReleaseListUrl(url)) return jsonResponse([official, personal]);
+    if (url.endsWith('personal-release.json')) return jsonResponse(manifest);
     throw new Error(`Unexpected URL: ${url}`);
   };
-  assert.equal(await resolveReleaseUpdate({ currentVersion: '1.23.1', fetchImpl }), null);
-  assert.equal(requests, 1);
+  const update = await resolveReleaseUpdate({ currentVersion: '1.23.1', fetchImpl });
+  assert.equal(update.version, '1.23.1-personal.1');
+  assert.equal(requests, 2);
 });
 
 test('rejects releases without the personal manifest', async () => {
   const release = buildReleasePayload();
   release.assets = release.assets.filter((asset) => asset.name !== 'personal-release.json');
   const fetchImpl = async (url) => {
-    if (url.endsWith('/releases/latest')) return jsonResponse(release);
+    if (isReleaseListUrl(url)) return jsonResponse([release]);
     throw new Error(`Unexpected URL: ${url}`);
   };
   await assert.rejects(
@@ -143,7 +149,7 @@ test('rejects a manifest whose version does not match the release tag', async ()
   const release = buildReleasePayload();
   const manifest = buildManifestPayload({ version: '1.24.0-personal.1' });
   const fetchImpl = async (url) => {
-    if (url.endsWith('/releases/latest')) return jsonResponse(release);
+    if (isReleaseListUrl(url)) return jsonResponse([release]);
     if (url.endsWith('personal-release.json')) return jsonResponse(manifest);
     throw new Error(`Unexpected URL: ${url}`);
   };
@@ -198,6 +204,61 @@ test('removes a downloaded asset that fails verification', async () => {
     /integrity verification/,
   );
   assert.equal(fs.existsSync(destination), false);
+});
+
+test('fails a stalled download instead of leaving it pending', async () => {
+  const directory = makeTempDir();
+  const destination = path.join(directory, 'update.zip');
+  const fetchImpl = async (url, options) => new Response(new ReadableStream({
+    start(controller) {
+      options?.signal?.addEventListener('abort', () => controller.error(options.signal.reason), { once: true });
+    },
+  }), {
+    status: 200,
+    headers: { 'content-length': '10' },
+  });
+
+  await assert.rejects(
+    downloadReleaseAsset({
+      url: 'https://example.com/update.zip',
+      destination,
+      expectedSha512: 'A'.repeat(86) + '==',
+      expectedSize: 10,
+      fetchImpl,
+      stallTimeoutMs: 25,
+    }),
+    /stalled/,
+  );
+});
+
+test('removes the staging directory after a stalled download', async () => {
+  const buildsDir = makeTempDir();
+  const fetchImpl = async (url, options) => new Response(new ReadableStream({
+    start(controller) {
+      options?.signal?.addEventListener('abort', () => controller.error(options.signal.reason), { once: true });
+    },
+  }), { status: 200 });
+
+  await assert.rejects(
+    stageReleaseUpdate({
+      buildsDir,
+      update: {
+        version: '1.23.1-personal.1',
+        commit: 'b'.repeat(40),
+        builtAt: '2026-09-13T10:00:00Z',
+        assetUrl: 'https://example.com/update.zip',
+        sha512: 'A'.repeat(86) + '==',
+        size: 10,
+      },
+      fetchImpl,
+      stallTimeoutMs: 25,
+    }),
+    /stalled/,
+  );
+  assert.deepEqual(
+    fs.readdirSync(buildsDir).filter((entry) => entry.startsWith('.staging-')),
+    [],
+  );
 });
 
 test('extracts through ditto and requires the app bundle', async () => {

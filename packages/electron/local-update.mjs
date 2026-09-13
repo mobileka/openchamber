@@ -5,6 +5,7 @@ import path from 'node:path';
 const STATE_FILE_NAME = 'state.json';
 const BUILD_FILE_NAME = 'build.json';
 const APP_BUNDLE_NAME = 'OpenChamber.app';
+export const STAGING_PREFIX = '.staging-';
 const FOLDER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const COMMIT_PATTERN = /^[0-9a-f]{7,40}$/i;
 
@@ -198,6 +199,35 @@ export const pruneLocalUpdateBuilds = ({
       removed.push(entry.name);
     } catch {
       // A build already removed by a concurrent prune is not an error.
+    }
+  }
+  return removed;
+};
+
+// A crashed or killed staging run leaves a partial download that build pruning
+// skips (leading dot), so stale staging directories are cleaned on the next run.
+export const pruneStaleStagingDirs = ({
+  buildsDir,
+  maxAgeMs = 24 * 60 * 60 * 1000,
+  now = Date.now(),
+  fsModule = fs,
+} = {}) => {
+  const removed = [];
+  let entries;
+  try {
+    entries = fsModule.readdirSync(buildsDir, { withFileTypes: true });
+  } catch {
+    return removed;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(STAGING_PREFIX)) continue;
+    const target = path.join(buildsDir, entry.name);
+    try {
+      if (now - fsModule.statSync(target).mtimeMs < maxAgeMs) continue;
+      fsModule.rmSync(target, { recursive: true, force: true });
+      removed.push(entry.name);
+    } catch {
+      // A staging directory owned by a live run must survive.
     }
   }
   return removed;

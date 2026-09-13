@@ -13,8 +13,13 @@ const computePersonalReleaseVersion = ({ baseVersion, latestTag }) => {
   if (!baseMatch) throw new Error(`BASE_VERSION must be a plain x.y.z version, got: ${baseVersion || '(missing)'}`);
   const base = baseMatch.slice(1).map(Number);
 
-  const latestMatch = PERSONAL_TAG_PATTERN.exec(String(latestTag || '').trim());
-  if (!latestMatch) return `${base.join('.')}-personal.1`;
+  const rawLatest = String(latestTag || '').trim();
+  if (!rawLatest) return `${base.join('.')}-personal.1`;
+
+  const latestMatch = PERSONAL_TAG_PATTERN.exec(rawLatest);
+  if (!latestMatch) {
+    throw new Error(`LATEST_TAG is not a personal release: ${rawLatest}`);
+  }
 
   const latestCore = [Number(latestMatch[1]), Number(latestMatch[2]), Number(latestMatch[3])];
   if (compareCores(base, latestCore) > 0) return `${base.join('.')}-personal.1`;

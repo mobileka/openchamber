@@ -8,7 +8,9 @@ import { promisify } from 'node:util';
 
 import {
   pruneLocalUpdateBuilds,
+  pruneStaleStagingDirs,
   readLocalUpdateState,
+  STAGING_PREFIX,
   writeLocalUpdateState,
 } from './local-update.mjs';
 
@@ -143,19 +145,21 @@ export const resolveReleaseUpdate = async ({
 } = {}) => {
   const { owner, repo } = repository;
   const response = await requestGithubJson({
-    url: `https://api.github.com/repos/${owner}/${repo}/releases/latest`,
+    url: `https://api.github.com/repos/${owner}/${repo}/releases?per_page=10`,
     fetchImpl,
     timeoutMs,
   });
-  if (response.status === 404) return null;
   if (!response.ok) {
     throw new Error(`Release check failed (HTTP ${response.status})`);
   }
-  const release = parseLatestRelease(await response.json());
-  if (!release) throw new Error('The latest GitHub release is not a valid update source');
-  // Releases that are not from the personal channel are ignored rather than
-  // treated as broken updates.
-  if (!isPersonalReleaseVersion(release.version)) return null;
+  const payload = await response.json();
+  if (!Array.isArray(payload)) throw new Error('The GitHub releases response is not a list');
+  // Releases that are not from the personal channel are skipped, so a stray
+  // release can never hide a personal one.
+  const release = payload
+    .map((entry) => parseLatestRelease(entry))
+    .find((entry) => entry !== null && isPersonalReleaseVersion(entry.version)) || null;
+  if (!release) return null;
   if (!isNewerReleaseVersion(release.version, currentVersion)) return null;
 
   const manifestAsset = findReleaseAsset(release, RELEASE_MANIFEST_ASSET);
@@ -201,51 +205,72 @@ export const downloadReleaseAsset = async ({
   expectedSize,
   fetchImpl = fetch,
   onProgress,
+  stallTimeoutMs = 60_000,
 } = {}) => {
-  const response = await fetchImpl(url, {
-    headers: { 'User-Agent': GITHUB_REQUEST_HEADERS['User-Agent'] },
-  });
-  if (!response.ok) throw new Error(`Update download failed (HTTP ${response.status})`);
-  if (!response.body || typeof response.body.getReader !== 'function') {
-    throw new Error('Update download returned no body');
-  }
+  const controller = new AbortController();
+  let stallTimer = null;
 
-  const contentLength = Number(response.headers.get('content-length') || 0);
-  const total = Number.isSafeInteger(contentLength) && contentLength > 0 ? contentLength : expectedSize;
-  const hash = crypto.createHash('sha512');
-  let downloaded = 0;
-  let lastReportedAt = 0;
-
-  const report = (force) => {
-    if (typeof onProgress !== 'function') return;
-    const now = Date.now();
-    if (!force && now - lastReportedAt < PROGRESS_THROTTLE_MS) return;
-    lastReportedAt = now;
-    onProgress({ downloaded, total });
+  // A stalled connection must fail the invoke instead of leaving the dialog on
+  // a forever spinner; the timer resets on every received chunk.
+  const armStallTimer = () => {
+    if (!(stallTimeoutMs > 0)) return;
+    if (stallTimer) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      controller.abort(new Error('Update download stalled'));
+    }, stallTimeoutMs);
   };
 
-  await pipeline(
-    Readable.fromWeb(response.body),
-    async function* hashChunks(source) {
-      for await (const chunk of source) {
-        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        downloaded += buffer.length;
-        hash.update(buffer);
-        report(false);
-        yield buffer;
-      }
-    },
-    fs.createWriteStream(destination),
-  );
-  report(true);
+  try {
+    armStallTimer();
+    const response = await fetchImpl(url, {
+      headers: { 'User-Agent': GITHUB_REQUEST_HEADERS['User-Agent'] },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Update download failed (HTTP ${response.status})`);
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      throw new Error('Update download returned no body');
+    }
 
-  const actualSha512 = hash.digest('base64');
-  const actualSize = fs.statSync(destination).size;
-  if (actualSize !== expectedSize || actualSha512 !== expectedSha512) {
-    fs.rmSync(destination, { force: true });
-    throw new Error('The downloaded update failed integrity verification');
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    const total = Number.isSafeInteger(contentLength) && contentLength > 0 ? contentLength : expectedSize;
+    const hash = crypto.createHash('sha512');
+    let downloaded = 0;
+    let lastReportedAt = 0;
+
+    const report = (force) => {
+      if (typeof onProgress !== 'function') return;
+      const now = Date.now();
+      if (!force && now - lastReportedAt < PROGRESS_THROTTLE_MS) return;
+      lastReportedAt = now;
+      onProgress({ downloaded, total });
+    };
+
+    await pipeline(
+      Readable.fromWeb(response.body),
+      async function* hashChunks(source) {
+        for await (const chunk of source) {
+          armStallTimer();
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          downloaded += buffer.length;
+          hash.update(buffer);
+          report(false);
+          yield buffer;
+        }
+      },
+      fs.createWriteStream(destination),
+    );
+    report(true);
+
+    const actualSha512 = hash.digest('base64');
+    const actualSize = fs.statSync(destination).size;
+    if (actualSize !== expectedSize || actualSha512 !== expectedSha512) {
+      fs.rmSync(destination, { force: true });
+      throw new Error('The downloaded update failed integrity verification');
+    }
+    return { size: actualSize, sha512: actualSha512 };
+  } finally {
+    if (stallTimer) clearTimeout(stallTimer);
   }
-  return { size: actualSize, sha512: actualSha512 };
 };
 
 export const extractReleaseArchive = async ({
@@ -285,6 +310,7 @@ export const stageReleaseUpdate = async ({
   fetchImpl = fetch,
   execFileImpl = execFile,
   onProgress,
+  stallTimeoutMs,
 } = {}) => {
   if (typeof buildsDir !== 'string' || !path.isAbsolute(buildsDir)) {
     throw new Error('buildsDir must be an absolute path');
@@ -298,7 +324,8 @@ export const stageReleaseUpdate = async ({
   }
   const stagedAppPath = path.join(buildsDir, folder, RELEASE_APP_BUNDLE);
   fs.mkdirSync(buildsDir, { recursive: true });
-  const stagingDir = fs.mkdtempSync(path.join(buildsDir, '.staging-'));
+  pruneStaleStagingDirs({ buildsDir });
+  const stagingDir = fs.mkdtempSync(path.join(buildsDir, STAGING_PREFIX));
 
   try {
     const archivePath = path.join(stagingDir, 'update.zip');
@@ -309,6 +336,7 @@ export const stageReleaseUpdate = async ({
       expectedSize: release.size,
       fetchImpl,
       onProgress,
+      stallTimeoutMs,
     });
 
     const extractDir = path.join(stagingDir, 'payload');
