@@ -197,6 +197,12 @@ function shouldSkipCompression(req, res) {
 }
 
 const OPENCHAMBER_VERSION = (() => {
+  const envVersion = typeof process.env.OPENCHAMBER_VERSION === 'string'
+    ? process.env.OPENCHAMBER_VERSION.trim()
+    : '';
+  if (envVersion.length > 0) {
+    return envVersion;
+  }
   try {
     const packagePath = path.resolve(__dirname, '..', 'package.json');
     const raw = fs.readFileSync(packagePath, 'utf8');
