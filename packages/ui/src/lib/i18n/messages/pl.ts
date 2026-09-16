@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './pl.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
   'sessions.aiRename.action': 'Zmień nazwę z AI',
@@ -30,6 +31,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n.pl,
   ...linearPanelI18n.pl,
+  ...pluginPanelI18n.pl,
   'terminalView.actions.attachSelection': 'Dołącz zaznaczone dane wyjściowe',
   'terminalView.actions.copySelection': 'Kopiuj zaznaczone dane wyjściowe',
   'terminalView.toast.selectionCopied': 'Skopiowano dane wyjściowe',
@@ -923,6 +925,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.container.sessionLoadError.retry': 'Spróbuj ponownie',
   'sessions.sidebar.group.empty.loadingSessions': 'Wczytywanie sesji…',
   'sessions.sidebar.group.empty.loadFailed': 'Nie udało się odświeżyć sesji.',
+  'sessions.sidebar.group.empty.initializationFailed': 'Nie udało się zainicjować obszaru roboczego.',
+  'sessions.search.submitHint': 'Naciśnij Enter, aby wyszukać',
   'sessions.sidebar.group.empty.retry': 'Spróbuj ponownie',
   'sessions.sidebar.group.empty.permissionDenied': 'Wymagany jest dostęp do folderu.',
   'sessions.sidebar.group.empty.grantAccess': 'Przyznaj dostęp',
@@ -1502,6 +1506,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.toolPart.error': 'Błąd:',
   'chat.toolPart.lspErrors': 'Błędy LSP',
   'chat.toolPart.moreErrors': '+{count} kolejnych błędów',
+  'chat.toolPart.moreRows': '+{count} kolejnych wierszy',
   'chat.toolPart.noOutputProduced': 'Brak wygenerowanego wyniku',
   'chat.toolPart.openSubtask': 'Otwórz podzadanie typu {type}',
   'chat.toolPart.output': 'Wyjście',
@@ -3359,6 +3364,10 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.breakdown.mcpCountPlural': '{count} MCP',
   'chat.workStatus.sections.open': 'Wybierz sekcje',
   'chat.workStatus.sections.dialogTitle': 'Sekcje panelu',
+  'chat.workStatus.sections.reorder': 'Przeciągnij {label}, aby zmienić kolejność',
+  'chat.workStatus.sections.dragInstructions': 'Naciśnij spację, aby chwycić sekcję, przesuń ją strzałkami i naciśnij spację, aby ją upuścić. Escape anuluje zmianę.',
+  'chat.workStatus.sections.position': '{label}, pozycja {position} z {count}.',
+  'chat.workStatus.sections.dragCancelled': 'Zmiana kolejności anulowana.',
   'chat.workStatus.sections.dialogDescription': 'Wybierz, co pokazuje panel stanu pracy. Ukryte sekcje zachowują swoje dane — po prostu nie są wyświetlane.',
   'chat.workStatus.sections.allHidden': 'Nie wybrano żadnych sekcji',
   'chat.workStatus.sections.showAll': 'Pokaż wszystkie',

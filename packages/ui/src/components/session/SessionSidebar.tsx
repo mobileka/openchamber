@@ -13,7 +13,6 @@ import { getDeferredSafeStorage } from '@/stores/utils/safeStorage';
 import { useGitStore, useGitAllBranches, useGitRepoStatusMap } from '@/stores/useGitStore';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { NewWorktreeDialog } from './NewWorktreeDialog';
-import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useSessionSearchEffects } from './sidebar/shell/useSessionSearchEffects';
 import { useSessionProjectViewState } from './sidebar/projects/useSessionProjectViewState';
 import { useProjectRepoStatus } from './sidebar/projects/useProjectRepoStatus';
@@ -136,10 +135,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const openMultiRunLauncher = useUIStore((state) => state.openMultiRunLauncher);
   const notifyOnSubtasks = useUIStore((state) => state.notifyOnSubtasks);
 
-  const debouncedSessionSearchQuery = useDebouncedValue(sessionSearchQuery, 120);
   const normalizedSessionSearchQuery = React.useMemo(
-    () => debouncedSessionSearchQuery.trim().toLowerCase(),
-    [debouncedSessionSearchQuery],
+    () => sessionSearchQuery.trim().toLowerCase(),
+    [sessionSearchQuery],
   );
 
   const hasSessionSearchQuery = normalizedSessionSearchQuery.length > 0;
@@ -217,6 +215,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     const discoverWorktrees = async () => {
       const discoveryRuntimeKey = runtimeKey;
       const projectEntries = useProjectsStore.getState().projects;
+      useSessionUIStore.setState({ worktreeDiscoveryByProject: new Map(projectEntries.map((project) => [normalizePath(project.path) ?? project.path, 'loading'])) });
       if (projectEntries.length === 0 || isVSCode) {
         if (!cancelled) {
           rawWorktreesByProjectRef.current = {
@@ -312,6 +311,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         return;
       }
       setUnresolvedWorktreeProjectPaths(unresolvedProjectPaths);
+      useSessionUIStore.setState({ worktreeDiscoveryByProject: new Map(projectEntries.map((project) => {
+        const path = normalizePath(project.path) ?? project.path;
+        return [path, unresolvedProjectPaths.has(path) ? 'error' : 'ready'];
+      })) });
       setResolvedWorktreeTopologyKey(projectWorktreeDiscoveryKey);
     };
 
@@ -346,6 +349,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     color: string | null;
     iconBackground: string | null;
     defaultModel: string | null;
+    defaultVariant: string | null;
   }) => {
     if (!editingProjectDialogId) {
       return;
@@ -356,6 +360,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       color: data.color,
       iconBackground: data.iconBackground,
       defaultModel: data.defaultModel ?? null,
+      defaultVariant: data.defaultVariant ?? null,
     });
   }, [editingProjectDialogId, updateProjectMeta]);
 
@@ -569,9 +574,16 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       // has seen; refresh each registered project among them exactly once.
       for (const project of resolveProjectsForWorktreeChange(event.directories)) {
         const projectPath = normalizePath(project.path);
+        const refreshRuntime = getRuntimeKey();
+        const publishDiscovery = (status: 'loading' | 'ready' | 'error') => {
+          if (!projectPath || getRuntimeKey() !== refreshRuntime) return;
+          useSessionUIStore.setState((state) => ({ worktreeDiscoveryByProject: new Map(state.worktreeDiscoveryByProject).set(projectPath, status) }));
+        };
+        publishDiscovery('loading');
         void refreshProjectWorktreeTopology(project, null, worktreeRefreshDependencies)
           .then(() => {
-            if (!projectPath) return;
+            if (!projectPath || getRuntimeKey() !== refreshRuntime) return;
+            publishDiscovery('ready');
             setUnresolvedWorktreeProjectPaths((current) => {
               if (!current.has(projectPath)) return current;
               const next = new Set(current);
@@ -580,7 +592,8 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
             });
           })
           .catch(() => {
-            if (!projectPath) return;
+            if (!projectPath || getRuntimeKey() !== refreshRuntime) return;
+            publishDiscovery('error');
             setUnresolvedWorktreeProjectPaths((current) => new Set(current).add(projectPath));
           });
       }

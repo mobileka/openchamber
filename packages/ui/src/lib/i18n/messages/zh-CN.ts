@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './zh-CN.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
   'sessions.aiRename.action': '使用 AI 重命名',
@@ -30,6 +31,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n['zh-CN'],
   ...linearPanelI18n['zh-CN'],
+  ...pluginPanelI18n['zh-CN'],
   'terminalView.actions.attachSelection': '附加所选输出',
   'terminalView.actions.copySelection': '复制所选输出',
   'terminalView.toast.selectionCopied': '已复制输出',
@@ -2239,6 +2241,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.container.sessionLoadError.retry': '重试',
   'sessions.sidebar.group.empty.loadingSessions': '正在加载会话…',
   'sessions.sidebar.group.empty.loadFailed': '无法刷新会话。',
+  'sessions.sidebar.group.empty.initializationFailed': '无法初始化工作区。',
+  'sessions.search.submitHint': '按 Enter 键搜索',
   'sessions.sidebar.group.empty.retry': '重试',
   'sessions.sidebar.group.empty.permissionDenied': '需要文件夹访问权限。',
   'sessions.sidebar.group.empty.grantAccess': '授予访问权限',
@@ -2427,6 +2431,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.toolOutputDialog.noOutputProduced': '没有产生输出',
   'chat.toolPart.lspErrors': 'LSP 错误',
   'chat.toolPart.moreErrors': '+{count} 个更多错误',
+  'chat.toolPart.moreRows': '+{count} 行更多',
   'chat.toolPart.error': '错误：',
   'chat.toolPart.awaitingResponse': '等待响应...',
   'chat.toolPart.noOutputProduced': '未产生输出',
@@ -3343,6 +3348,10 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.breakdown.mcpCountPlural': '{count} 个 MCP',
   'chat.workStatus.sections.open': '选择板块',
   'chat.workStatus.sections.dialogTitle': '面板板块',
+  'chat.workStatus.sections.reorder': '拖动 {label} 以重新排序',
+  'chat.workStatus.sections.dragInstructions': '按空格键选取板块，使用方向键移动，再按空格键放下。按 Escape 键取消。',
+  'chat.workStatus.sections.position': '{label}，第 {position} 项，共 {count} 项。',
+  'chat.workStatus.sections.dragCancelled': '已取消排序。',
   'chat.workStatus.sections.dialogDescription': '选择工作状态面板显示的内容。隐藏的板块仍保留数据，只是不再显示。',
   'chat.workStatus.sections.allHidden': '未选择任何部分',
   'chat.workStatus.sections.showAll': '全部显示',

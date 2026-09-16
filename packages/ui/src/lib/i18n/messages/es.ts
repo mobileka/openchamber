@@ -2,6 +2,7 @@ import type { I18nKey } from './en';
 import { settingsDict } from './es.settings';
 import { linearIssuePickerI18n } from './linear-issue-picker.i18n';
 import { linearPanelI18n } from './linear-panel.i18n';
+import { pluginPanelI18n } from './plugin-panel.i18n';
 
 export const dict: Record<I18nKey, string> = {
   'sessions.aiRename.action': 'Renombrar con IA',
@@ -30,6 +31,7 @@ export const dict: Record<I18nKey, string> = {
   ...settingsDict,
   ...linearIssuePickerI18n.es,
   ...linearPanelI18n.es,
+  ...pluginPanelI18n.es,
   'terminalView.actions.attachSelection': 'Adjuntar salida seleccionada',
   'terminalView.actions.copySelection': 'Copiar salida seleccionada',
   'terminalView.toast.selectionCopied': 'Salida copiada',
@@ -2251,6 +2253,8 @@ export const dict: Record<I18nKey, string> = {
   "chat.container.sessionLoadError.retry": "Reintentar",
   "sessions.sidebar.group.empty.loadingSessions": "Cargando sesiones…",
   "sessions.sidebar.group.empty.loadFailed": "No se pudieron actualizar las sesiones.",
+  "sessions.sidebar.group.empty.initializationFailed": "No se pudo inicializar el espacio de trabajo.",
+  "sessions.search.submitHint": "Pulsa Intro para buscar",
   "sessions.sidebar.group.empty.retry": "Reintentar",
   "sessions.sidebar.group.empty.permissionDenied": "Se requiere acceso a la carpeta.",
   "sessions.sidebar.group.empty.grantAccess": "Permitir acceso",
@@ -2427,6 +2431,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.toolOutputDialog.noOutputProduced": "No se produjo ninguna salida",
   "chat.toolPart.lspErrors": "Errores LSP",
   "chat.toolPart.moreErrors": "+{count} errores más",
+  "chat.toolPart.moreRows": "+{count} filas más",
   "chat.toolPart.error": "Error:",
   "chat.toolPart.awaitingResponse": "Esperando respuesta...",
   "chat.toolPart.noOutputProduced": "No se produjo ninguna salida",
@@ -3343,6 +3348,10 @@ export const dict: Record<I18nKey, string> = {
   'chat.workStatus.breakdown.mcpCountPlural': '{count} MCP',
   'chat.workStatus.sections.open': 'Elegir secciones',
   'chat.workStatus.sections.dialogTitle': 'Secciones del panel',
+  'chat.workStatus.sections.reorder': 'Arrastra {label} para reordenar',
+  'chat.workStatus.sections.dragInstructions': 'Pulsa Espacio para seleccionar una sección, muévela con las flechas y pulsa Espacio para soltarla. Pulsa Escape para cancelar.',
+  'chat.workStatus.sections.position': '{label}, posición {position} de {count}.',
+  'chat.workStatus.sections.dragCancelled': 'Reordenación cancelada.',
   'chat.workStatus.sections.dialogDescription': 'Elige qué muestra el panel de estado. Las secciones ocultas conservan sus datos: solo no aparecen en el panel.',
   'chat.workStatus.sections.allHidden': 'Ninguna sección seleccionada',
   'chat.workStatus.sections.showAll': 'Mostrar todas',
