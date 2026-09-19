@@ -68,6 +68,8 @@ export const createBootstrapRuntime = (dependencies) => {
       pluginNotificationEmitter,
       desktopUpdater,
       skipBodyParsing,
+      commandcodeModelsNotice,
+      emitCommandcodeModelsUpdatedEvent,
     } = options;
 
     const uiAuthController = createUiAuth({
@@ -169,6 +171,8 @@ export const createBootstrapRuntime = (dependencies) => {
       fetchFreeZenModels,
       getCachedZenModels,
       desktopUpdater,
+      commandcodeModelsNotice,
+      emitCommandcodeModelsUpdatedEvent,
     });
 
     return {
