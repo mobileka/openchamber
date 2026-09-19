@@ -18,8 +18,9 @@ const childProcess = await import('child_process');
 const packageManager = await import('../package-manager.js');
 const { registerOpenChamberRoutes } = await import('./openchamber-routes.js');
 
-const createApp = ({ environment = {}, storedOptions = {}, desktopUpdater, platform = 'linux', execPath = '/usr/bin/node' } = {}) => {
+const createApp = ({ environment = {}, storedOptions = {}, desktopUpdater, platform = 'linux', execPath = '/usr/bin/node', commandcodeModelsNotice } = {}) => {
   const app = express();
+  app.use(express.json());
   const dependencies = {
     fs: {
       existsSync: vi.fn(() => false),
@@ -56,6 +57,18 @@ const createApp = ({ environment = {}, storedOptions = {}, desktopUpdater, platf
     fetchFreeZenModels: vi.fn(),
     getCachedZenModels: vi.fn(),
     desktopUpdater,
+    commandcodeModelsNotice: commandcodeModelsNotice ?? {
+      read: vi.fn(async () => null),
+      save: vi.fn(async (payload) => ({
+        version: 1,
+        summary: payload.summary,
+        details: payload.details,
+        ...(payload.commit ? { commit: payload.commit } : {}),
+        changedAt: 1700000000000,
+      })),
+      clear: vi.fn(async () => undefined),
+    },
+    emitCommandcodeModelsUpdatedEvent: vi.fn(),
   };
 
   registerOpenChamberRoutes(app, dependencies);
@@ -470,3 +483,111 @@ describe('OpenChamber web update route on Windows', () => {
   });
 });
 
+
+describe('Command Code model list update notice routes', () => {
+  it('answers with the stored notice, or null when there is none', async () => {
+    const { app } = createApp();
+    await request(app).get('/api/openchamber/commandcode-models-update').expect(200, { notice: null });
+
+    const notice = { version: 1, summary: '3 models added', details: '- Added a model', commit: 'abc1234', changedAt: 1700000000000 };
+    const { app: appWithNotice } = createApp({
+      commandcodeModelsNotice: {
+        read: vi.fn(async () => notice),
+        save: vi.fn(),
+        clear: vi.fn(),
+      },
+    });
+    await request(appWithNotice).get('/api/openchamber/commandcode-models-update').expect(200, { notice });
+  });
+
+  it('answers 500 when the stored notice cannot be read', async () => {
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { app } = createApp({
+      commandcodeModelsNotice: {
+        read: vi.fn(async () => { throw new Error('EACCES'); }),
+        save: vi.fn(),
+        clear: vi.fn(),
+      },
+    });
+
+    const response = await request(app).get('/api/openchamber/commandcode-models-update').expect(500);
+    expect(response.body.error).toBe('Failed to read the model list update');
+    expect(logError).toHaveBeenCalledOnce();
+  });
+
+  it('stores a posted notice and tells connected clients', async () => {
+    const { app, dependencies } = createApp();
+    const payload = { summary: '3 models added', details: '- Added **GLM-5.3 FlashX**', commit: 'abc1234' };
+
+    const response = await request(app)
+      .post('/api/openchamber/commandcode-models-update')
+      .send(payload)
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.notice).toMatchObject(payload);
+    expect(dependencies.commandcodeModelsNotice.save).toHaveBeenCalledWith(payload);
+    expect(dependencies.emitCommandcodeModelsUpdatedEvent).toHaveBeenCalledWith({ changedAt: response.body.notice.changedAt });
+  });
+
+  it('answers 400 for an invalid notice and stores nothing', async () => {
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const invalid = new Error('summary and details are required');
+    invalid.statusCode = 400;
+    const { app, dependencies } = createApp({
+      commandcodeModelsNotice: {
+        read: vi.fn(),
+        save: vi.fn(async () => { throw invalid; }),
+        clear: vi.fn(),
+      },
+    });
+
+    const response = await request(app)
+      .post('/api/openchamber/commandcode-models-update')
+      .send({ summary: '' })
+      .expect(400);
+
+    expect(response.body.error).toBe('summary and details are required');
+    expect(dependencies.emitCommandcodeModelsUpdatedEvent).not.toHaveBeenCalled();
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it('answers 500 and tells nobody when the notice cannot be stored', async () => {
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { app, dependencies } = createApp({
+      commandcodeModelsNotice: {
+        read: vi.fn(),
+        save: vi.fn(async () => { throw new Error('ENOSPC'); }),
+        clear: vi.fn(),
+      },
+    });
+
+    await request(app)
+      .post('/api/openchamber/commandcode-models-update')
+      .send({ summary: 'summary', details: 'details' })
+      .expect(500);
+
+    expect(dependencies.emitCommandcodeModelsUpdatedEvent).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledOnce();
+  });
+
+  it('dismisses the notice', async () => {
+    const { app, dependencies } = createApp();
+    await request(app).post('/api/openchamber/commandcode-models-update/dismiss').expect(200, { success: true });
+    expect(dependencies.commandcodeModelsNotice.clear).toHaveBeenCalledOnce();
+  });
+
+  it('answers 500 when the notice cannot be dismissed', async () => {
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { app } = createApp({
+      commandcodeModelsNotice: {
+        read: vi.fn(),
+        save: vi.fn(),
+        clear: vi.fn(async () => { throw new Error('EROFS'); }),
+      },
+    });
+
+    await request(app).post('/api/openchamber/commandcode-models-update/dismiss').expect(500);
+    expect(logError).toHaveBeenCalledOnce();
+  });
+});

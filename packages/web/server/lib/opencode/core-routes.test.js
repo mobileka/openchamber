@@ -127,6 +127,23 @@ describe('core-routes', () => {
     expect(response.body).toEqual({ body: { content: 'Snippet body' } });
   });
 
+  it('should parse JSON bodies for the model list update notice routes', async () => {
+    const app = express();
+    registerCommonRequestMiddleware(app, { express });
+    app.post('/api/openchamber/commandcode-models-update', (req, res) => {
+      res.json({ body: req.body });
+    });
+
+    const response = await request(app)
+      .post('/api/openchamber/commandcode-models-update')
+      .send({ summary: '3 models added', details: '- Added a model' })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      body: { summary: '3 models added', details: '- Added a model' },
+    });
+  });
+
   it('should parse JSON bodies for custom provider upsert routes', async () => {
     const app = express();
     registerCommonRequestMiddleware(app, { express });

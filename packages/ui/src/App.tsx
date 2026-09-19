@@ -68,6 +68,7 @@ import { SyncAppEffects } from '@/apps/AppEffects';
 import { resetAppForRuntimeEndpointChange } from '@/apps/runtimeEndpointReset';
 import { useAppFontEffects } from '@/apps/useAppFontEffects';
 import { OpenCodeUpdateToast } from '@/components/update/OpenCodeUpdateToast';
+import { CommandcodeModelsUpdateNotice } from '@/components/update/CommandcodeModelsUpdateNotice';
 import { markStartupTrace, startupTraceEnabled } from '@/lib/startupTrace';
 
 // Lazy-loaded heavy views — loaded on demand to reduce initial bundle size.
@@ -212,6 +213,7 @@ const EmbeddedSessionChatContent: React.FC<{
     <>
       <SyncAppEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
       <OpenCodeUpdateToast />
+      <CommandcodeModelsUpdateNotice />
       <ChatView
         active={embeddedBackgroundWorkEnabled}
         // Always subscribe to message history in the mounted session-chat
@@ -956,6 +958,7 @@ function App({ apis }: AppProps) {
                 <div className={isDesktopRuntime ? 'h-full text-foreground bg-transparent' : 'h-full text-foreground bg-background'}>
                   <SyncAppEffects embeddedBackgroundWorkEnabled={embeddedBackgroundWorkEnabled} />
                   <OpenCodeUpdateToast />
+                  <CommandcodeModelsUpdateNotice />
                   <MainLayout />
                   <Toaster />
                   <AppLinkConfirmDialog />

@@ -66,6 +66,7 @@ import {
   registerServerStatusRoutes,
 } from './lib/opencode/core-routes.js';
 import { registerOpenChamberRoutes } from './lib/opencode/openchamber-routes.js';
+import { createCommandcodeModelsNoticeRuntime } from './lib/opencode/commandcode-models-notice.js';
 import { createRestartNotifier } from './lib/opencode/restart-notify.js';
 import { createServerUtilsRuntime } from './lib/opencode/server-utils-runtime.js';
 import { createStaticRoutesRuntime } from './lib/opencode/static-routes-runtime.js';
@@ -1372,6 +1373,31 @@ const emitAgentMemoryChangedEvent = (event) => {
     }
   }
 };
+/**
+ * Tells connected clients that the published model list changed, so whichever
+ * of them is in front of the user can show the update toast. The event carries
+ * only the timestamp; clients re-read the notice from the server.
+ */
+const emitCommandcodeModelsUpdatedEvent = (event) => {
+  for (const client of uiOpenChamberEventClients) {
+    try {
+      writeSseEvent(client, {
+        type: 'openchamber:commandcode-models-updated',
+        properties: {
+          changedAt: event.changedAt,
+        },
+      });
+    } catch {
+      uiOpenChamberEventClients.delete(client);
+    }
+  }
+};
+const commandcodeModelsNoticeRuntime = createCommandcodeModelsNoticeRuntime({
+  fs,
+  path,
+  openchamberDataDir: OPENCHAMBER_DATA_DIR,
+  logger: console,
+});
 const scheduledTaskService = createScheduledTaskService({
   readSettingsFromDiskMigrated,
   sanitizeProjects,
@@ -1865,6 +1891,8 @@ async function main(options = {}) {
     setAutoAcceptSession,
     agentToolRuntime,
     desktopUpdater,
+    commandcodeModelsNotice: commandcodeModelsNoticeRuntime,
+    emitCommandcodeModelsUpdatedEvent,
   });
   uiAuthController = bootstrapResult.uiAuthController;
   realtimeProxyRuntime = attachRealtimeProxy({
