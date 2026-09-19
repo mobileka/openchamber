@@ -52,6 +52,25 @@ describe('createRestartNotifier', () => {
     });
   });
 
+  it('retries readiness while the sidecar port is still being allocated', async () => {
+    const send = vi.fn(async () => ({ sessionId: 'recent' }));
+    const waitForOpenCodeReady = vi.fn()
+      .mockRejectedValueOnce(new Error('OpenCode port is not available'))
+      .mockResolvedValueOnce(true);
+
+    const notify = createRestartNotifier({
+      sessionService: { send },
+      listSessions,
+      waitForOpenCodeReady,
+      readyTimeoutMs: 500,
+      readyIntervalMs: 5,
+    });
+
+    await expect(notify()).resolves.toEqual({ sent: true, sessionId: 'recent', directory: '/work/app' });
+    expect(waitForOpenCodeReady).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenCalledOnce();
+  });
+
   it('does not send when OpenCode never becomes ready', async () => {
     const send = vi.fn();
     const notify = createRestartNotifier({
@@ -60,6 +79,8 @@ describe('createRestartNotifier', () => {
       waitForOpenCodeReady: vi.fn(async () => {
         throw new Error('OpenCode port is not available');
       }),
+      readyTimeoutMs: 30,
+      readyIntervalMs: 5,
     });
 
     await expect(notify()).resolves.toEqual({ sent: false, reason: 'opencode-not-ready' });
