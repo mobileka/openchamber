@@ -276,6 +276,21 @@ describe('OpenChamber desktop restart route', () => {
     expect(childProcess.spawn).not.toHaveBeenCalled();
   });
 
+  it('rejects a restart without an explicit delay', async () => {
+    const desktopUpdater = {
+      check: vi.fn(),
+      install: vi.fn(),
+      restart: vi.fn(async () => null),
+    };
+    const { app, dependencies } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
+
+    await request(app).post('/api/openchamber/restart').expect(400, {
+      error: 'delaySeconds is required (0-300 seconds)',
+    });
+    expect(desktopUpdater.restart).not.toHaveBeenCalled();
+    expect(dependencies.fs.promises.writeFile).not.toHaveBeenCalled();
+  });
+
   it('records a marker so the next launch can announce the restart', async () => {
     const desktopUpdater = {
       check: vi.fn(),

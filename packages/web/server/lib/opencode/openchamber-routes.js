@@ -150,10 +150,17 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         });
       }
 
-      const requestedDelaySeconds = Number(req.query?.delaySeconds);
-      const delaySeconds = Number.isFinite(requestedDelaySeconds)
-        ? Math.min(Math.max(Math.trunc(requestedDelaySeconds), 0), 300)
-        : 20;
+      // The caller names the delay: there is deliberately no hidden default, so
+      // the grace period lives in exactly one place (the caller, e.g. the
+      // /openchamber_restart command).
+      const rawDelaySeconds = req.query?.delaySeconds;
+      const requestedDelaySeconds = Number(rawDelaySeconds);
+      if (typeof rawDelaySeconds !== 'string' || rawDelaySeconds.trim() === '' || !Number.isFinite(requestedDelaySeconds)) {
+        return res.status(400).json({
+          error: 'delaySeconds is required (0-300 seconds)',
+        });
+      }
+      const delaySeconds = Math.min(Math.max(Math.trunc(requestedDelaySeconds), 0), 300);
 
       // Best effort: a restart must not fail because the marker could not be
       // written. The next launch turns a fresh marker into one line in the
