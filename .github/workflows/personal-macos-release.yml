@@ -1,13 +1,10 @@
 name: Personal macOS Release
 
-# Fork-only release channel: builds an unsigned macOS arm64 bundle on every
-# merge to personal and publishes it as a GitHub release. The desktop app stages
+# Fork-only release channel: builds an unsigned macOS arm64 bundle when run
+# manually and publishes it as a GitHub release. The desktop app stages
 # that release into its builds directory and applies it through the /Applications
 # symlink, so macOS code signing and notarization are intentionally not used.
 on:
-  push:
-    branches:
-      - personal
   workflow_dispatch:
 
 permissions:
