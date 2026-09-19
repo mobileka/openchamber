@@ -33,6 +33,8 @@ const createApp = ({ environment = {}, storedOptions = {}, desktopUpdater, platf
           port: 7897,
           ...storedOptions,
         })),
+        mkdir: vi.fn(async () => undefined),
+        writeFile: vi.fn(async () => undefined),
       },
     },
     path,
@@ -214,15 +216,17 @@ describe('OpenChamber desktop restart route', () => {
     const { app } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
 
     await request(app)
-      .post('/api/openchamber/restart?delaySeconds=0')
+      .post('/api/openchamber/restart?delaySeconds=1')
       .expect(200, {
         success: true,
         message: 'OpenChamber will restart shortly',
-        restartInSeconds: 0,
+        restartInSeconds: 1,
       });
 
+    // The response must reach the caller before the restart fires: the request
+    // that asked for it is what ends this turn.
     expect(desktopUpdater.restart).not.toHaveBeenCalled();
-    await waitForScheduledRestart();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
     expect(desktopUpdater.restart).toHaveBeenCalledOnce();
     expect(packageManager.checkForUpdates).not.toHaveBeenCalled();
   });
@@ -270,6 +274,43 @@ describe('OpenChamber desktop restart route', () => {
       error: 'Restarting is only available in the OpenChamber desktop app.',
     });
     expect(childProcess.spawn).not.toHaveBeenCalled();
+  });
+
+  it('records a marker so the next launch can announce the restart', async () => {
+    const desktopUpdater = {
+      check: vi.fn(),
+      install: vi.fn(),
+      restart: vi.fn(async () => null),
+    };
+    const { app, dependencies } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
+
+    await request(app).post('/api/openchamber/restart?delaySeconds=0').expect(200);
+    await waitForScheduledRestart();
+
+    expect(dependencies.fs.promises.writeFile).toHaveBeenCalledWith(
+      path.join('/tmp/openchamber', 'restart-notify.json'),
+      expect.any(String),
+      'utf8',
+    );
+    const marker = JSON.parse(dependencies.fs.promises.writeFile.mock.calls[0][1]);
+    expect(Number.isFinite(marker.requestedAt)).toBe(true);
+  });
+
+  it('still restarts when the notification marker cannot be written', async () => {
+    const desktopUpdater = {
+      check: vi.fn(),
+      install: vi.fn(),
+      restart: vi.fn(async () => null),
+    };
+    const { app, dependencies } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
+    dependencies.fs.promises.writeFile.mockRejectedValueOnce(new Error('EACCES'));
+    const logWarn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await request(app).post('/api/openchamber/restart?delaySeconds=0').expect(200);
+    await waitForScheduledRestart();
+
+    expect(logWarn).toHaveBeenCalledOnce();
+    expect(desktopUpdater.restart).toHaveBeenCalledOnce();
   });
 
   it('fails safely when the desktop restart bridge is unavailable', async () => {

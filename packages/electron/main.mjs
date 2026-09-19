@@ -15,6 +15,7 @@ import { replaceFileWithRetry } from './windows-file-replace.mjs';
 import { createTrayController } from './tray.mjs';
 import { resolveManagedOpenCodeCwd } from './opencode-cwd.mjs';
 import { stopEmbeddedServer } from './server-shutdown.mjs';
+import { clearRestartNotifyMarker, readRestartNotifyMarker } from './restart-notify.mjs';
 import { resolveStartupUrlProbePlan, shouldIgnoreLoopbackConnectionLimit } from './startup-url-selection.mjs';
 import { sanitizeRuntimeRequestHeaders } from './runtime-request-headers.mjs';
 import { probeDirectHostWithRetry } from './host-probe-policy.mjs';
@@ -1463,6 +1464,30 @@ const inheritUserShellEnv = () => {
 const shouldSkipLocalServer = () => {
   inheritUserShellEnv();
   return process.env.OPENCHAMBER_SKIP_LOCAL_SERVER === '1';
+};
+
+// A restart requested through the desktop endpoint leaves a marker behind.
+// The first boot after it has the web server post one line into the most
+// recently active session (the notifier itself waits for the sidecar), then
+// removes the marker — it is single-use, whatever the outcome, so a later
+// launch can never announce a restart that did not just happen.
+const notifyAfterRestart = async () => {
+  const dataDir = path.dirname(settingsFilePath());
+  const marker = readRestartNotifyMarker(dataDir);
+  if (!marker) {
+    await clearRestartNotifyMarker(dataDir);
+    return;
+  }
+  try {
+    const handle = state.serverHandle;
+    if (handle && typeof handle.notifyRestartComplete === 'function') {
+      log.info('[electron] restart confirmation', await handle.notifyRestartComplete());
+    }
+  } catch (error) {
+    log.warn('[electron] failed to post the restart confirmation', error);
+  } finally {
+    await clearRestartNotifyMarker(dataDir);
+  }
 };
 
 const spawnLocalServer = async () => {
@@ -5724,6 +5749,7 @@ app.whenReady().then(async () => {
     state.startupResolved = !shouldSkipLocalServer();
     state.initScript = buildInitScript(localOrigin, state.bootOutcome, apiBaseUrl, clientToken, state.requestHeaders);
     log.info('[electron] started in background without window');
+    void notifyAfterRestart();
     return;
   }
 
@@ -5738,6 +5764,7 @@ app.whenReady().then(async () => {
 
   const { initialUrl, localOrigin, bootOutcome, apiBaseUrl, clientToken, requestHeaders } = await resolveInitialUrl();
   await activateMainWindow(initialUrl, localOrigin, bootOutcome, { apiBaseUrl, clientToken, requestHeaders });
+  void notifyAfterRestart();
 
   // Notify renderer on OS wake-from-sleep so the SSE event pipeline can
   // reconnect immediately instead of waiting for the heartbeat watchdog.

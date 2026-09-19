@@ -1,5 +1,9 @@
 const SYSTEMD_SERVICE_UNIT_PATTERN = /^[A-Za-z0-9:_.@-]+\.service$/;
 
+// Written before a desktop restart is scheduled and consumed once by the next
+// launch; see packages/electron/restart-notify.mjs for the reader and the TTL.
+const RESTART_NOTIFY_MARKER_FILE = 'restart-notify.json';
+
 function resolveSystemdServiceUnit(environment) {
   if (!environment.INVOCATION_ID) {
     return null;
@@ -150,6 +154,20 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
       const delaySeconds = Number.isFinite(requestedDelaySeconds)
         ? Math.min(Math.max(Math.trunc(requestedDelaySeconds), 0), 300)
         : 20;
+
+      // Best effort: a restart must not fail because the marker could not be
+      // written. The next launch turns a fresh marker into one line in the
+      // most recently active session and deletes the file.
+      try {
+        await fs.promises.mkdir(openchamberDataDir, { recursive: true });
+        await fs.promises.writeFile(
+          path.join(openchamberDataDir, RESTART_NOTIFY_MARKER_FILE),
+          JSON.stringify({ requestedAt: Date.now() }),
+          'utf8',
+        );
+      } catch (error) {
+        console.warn('Failed to record the restart notification marker:', error);
+      }
 
       res.json({
         success: true,

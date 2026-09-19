@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import crypto from 'crypto';
 import http2 from 'node:http2';
+import { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { createUiAuth } from './lib/ui-auth/ui-auth.js';
 import { createTunnelAuth } from './lib/opencode/tunnel-auth.js';
 import { createManagedTunnelConfigRuntime } from './lib/tunnels/managed-config.js';
@@ -65,6 +66,7 @@ import {
   registerServerStatusRoutes,
 } from './lib/opencode/core-routes.js';
 import { registerOpenChamberRoutes } from './lib/opencode/openchamber-routes.js';
+import { createRestartNotifier } from './lib/opencode/restart-notify.js';
 import { createServerUtilsRuntime } from './lib/opencode/server-utils-runtime.js';
 import { createStaticRoutesRuntime } from './lib/opencode/static-routes-runtime.js';
 import { createSettingsRuntime } from './lib/opencode/settings-runtime.js';
@@ -1386,6 +1388,19 @@ const openChamberSessionService = createOpenChamberSessionService({
   emitSessionCreatedEvent,
   sessionKnowledgeRuntime,
 });
+// After a restart requested through the desktop endpoint, the fresh instance
+// posts one line into the most recently active session so the user can see the
+// app came back. The list is global (all directories) on purpose.
+const notifyRestartComplete = createRestartNotifier({
+  sessionService: openChamberSessionService,
+  waitForOpenCodeReady,
+  listSessions: async () => {
+    const baseUrl = buildOpenCodeUrl('/', '').replace(/\/$/, '');
+    const client = createOpencodeClient({ baseUrl, headers: getOpenCodeAuthHeaders() });
+    const response = await client.experimental.session.list({});
+    return Array.isArray(response?.data) ? response.data : [];
+  },
+});
 // Browser actions are published to whichever OpenChamber clients are connected;
 // the one owning the browser panel answers. `emitRequest` returns the number of
 // clients reached so the broker can fail fast when nobody is listening.
@@ -2070,6 +2085,7 @@ async function main(options = {}) {
       scheduledTasks: scheduledTasksRuntime.getStatus(),
     }),
     isReady: () => isOpenCodeReady,
+    notifyRestartComplete,
     restartOpenCode: () => restartOpenCode(),
     getOpenCodeProcessInfo: () => {
       const managed = Boolean((openCodeProcess || openCodePort) && !ENV_SKIP_OPENCODE_START && !isExternalOpenCode);
