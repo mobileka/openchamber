@@ -132,6 +132,58 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
     }
   });
 
+  app.post('/api/openchamber/restart', async (req, res) => {
+    try {
+      if (process.env.OPENCHAMBER_RUNTIME !== 'desktop') {
+        return res.status(400).json({
+          error: 'Restarting is only available in the OpenChamber desktop app.',
+        });
+      }
+      if (typeof desktopUpdater?.restart !== 'function') {
+        return res.status(503).json({
+          code: 'DESKTOP_RESTART_UNAVAILABLE',
+          error: 'The desktop restart is not available.',
+        });
+      }
+
+      const requestedDelaySeconds = Number(req.query?.delaySeconds);
+      const delaySeconds = Number.isFinite(requestedDelaySeconds)
+        ? Math.min(Math.max(Math.trunc(requestedDelaySeconds), 0), 300)
+        : 20;
+
+      res.json({
+        success: true,
+        message: 'OpenChamber will restart shortly',
+        restartInSeconds: delaySeconds,
+      });
+
+      setTimeout(() => {
+        const restartWithPendingLocalUpdate = async () => {
+          if (typeof desktopUpdater.applyLocalUpdate === 'function') {
+            try {
+              // A staged local build is applied the same way the update
+              // dialog's confirmation applies it. With nothing staged this
+              // throws and the desktop restart below runs instead.
+              await desktopUpdater.applyLocalUpdate();
+              return;
+            } catch {
+            }
+          }
+          await desktopUpdater.restart();
+        };
+
+        restartWithPendingLocalUpdate().catch((error) => {
+          console.error('Failed to restart OpenChamber:', error);
+        });
+      }, delaySeconds * 1000);
+    } catch (error) {
+      console.error('Failed to restart OpenChamber:', error);
+      res.status(500).json({
+        error: error instanceof Error ? error.message : 'Failed to restart OpenChamber',
+      });
+    }
+  });
+
   app.post('/api/openchamber/update-install', async (_req, res) => {
     try {
       if (process.env.OPENCHAMBER_RUNTIME === 'desktop') {

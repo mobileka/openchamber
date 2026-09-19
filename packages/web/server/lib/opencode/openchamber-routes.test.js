@@ -202,6 +202,86 @@ describe('OpenChamber desktop host update route', () => {
   });
 });
 
+describe('OpenChamber desktop restart route', () => {
+  const waitForScheduledRestart = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it('restarts through the desktop bridge after the requested delay', async () => {
+    const desktopUpdater = {
+      check: vi.fn(),
+      install: vi.fn(),
+      restart: vi.fn(async () => null),
+    };
+    const { app } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
+
+    await request(app)
+      .post('/api/openchamber/restart?delaySeconds=0')
+      .expect(200, {
+        success: true,
+        message: 'OpenChamber will restart shortly',
+        restartInSeconds: 0,
+      });
+
+    expect(desktopUpdater.restart).not.toHaveBeenCalled();
+    await waitForScheduledRestart();
+    expect(desktopUpdater.restart).toHaveBeenCalledOnce();
+    expect(packageManager.checkForUpdates).not.toHaveBeenCalled();
+  });
+
+  it('applies a staged local build instead of a plain restart when one is pending', async () => {
+    const desktopUpdater = {
+      check: vi.fn(),
+      install: vi.fn(),
+      applyLocalUpdate: vi.fn(async () => ({ applying: true })),
+      restart: vi.fn(async () => null),
+    };
+    const { app } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
+
+    await request(app).post('/api/openchamber/restart?delaySeconds=0').expect(200);
+    await waitForScheduledRestart();
+
+    expect(desktopUpdater.applyLocalUpdate).toHaveBeenCalledOnce();
+    expect(desktopUpdater.restart).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the plain restart when no local build is pending', async () => {
+    const desktopUpdater = {
+      check: vi.fn(),
+      install: vi.fn(),
+      applyLocalUpdate: vi.fn(async () => {
+        throw new Error('No local update is pending');
+      }),
+      restart: vi.fn(async () => null),
+    };
+    const { app } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
+    const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await request(app).post('/api/openchamber/restart?delaySeconds=0').expect(200);
+    await waitForScheduledRestart();
+
+    expect(desktopUpdater.applyLocalUpdate).toHaveBeenCalledOnce();
+    expect(desktopUpdater.restart).toHaveBeenCalledOnce();
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it('rejects a restart outside the desktop runtime', async () => {
+    const { app } = createApp();
+
+    await request(app).post('/api/openchamber/restart').expect(400, {
+      error: 'Restarting is only available in the OpenChamber desktop app.',
+    });
+    expect(childProcess.spawn).not.toHaveBeenCalled();
+  });
+
+  it('fails safely when the desktop restart bridge is unavailable', async () => {
+    const { app } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' } });
+
+    await request(app).post('/api/openchamber/restart').expect(503, {
+      code: 'DESKTOP_RESTART_UNAVAILABLE',
+      error: 'The desktop restart is not available.',
+    });
+  });
+});
+
 describe('OpenChamber foreground update route', () => {
   it('rejects a foreground update when the server is not owned by systemd', async () => {
     const { app } = createApp();

@@ -1553,6 +1553,7 @@ const spawnLocalServer = async () => {
         await handleInvoke(null, 'desktop_download_and_install_update');
         return updateInfo;
       },
+      applyLocalUpdate: () => handleInvoke(null, 'desktop_apply_local_update'),
       restart: () => handleInvoke(null, 'desktop_restart'),
     },
   });
