@@ -146,4 +146,32 @@ describe('openchamber events', () => {
     ]);
     unsubscribe();
   });
+
+  test('dispatches model list updates and ignores a malformed timestamp', async () => {
+    const { subscribeOpenchamberEvents } = await import('./openchamberEvents');
+    const updates: number[] = [];
+    const unsubscribe = subscribeOpenchamberEvents((event) => {
+      if (event.type === 'commandcode-models-updated') updates.push(event.changedAt);
+    });
+    const source = MockEventSource.instances[0];
+
+    source.onmessage?.({
+      data: JSON.stringify({ type: 'openchamber:commandcode-models-updated', properties: { changedAt: 123 } }),
+    });
+    source.onmessage?.({
+      data: JSON.stringify({ type: 'openchamber:commandcode-models-updated', properties: { changedAt: 'yesterday' } }),
+    });
+
+    const before = Date.now();
+    source.onmessage?.({
+      data: JSON.stringify({ type: 'openchamber:commandcode-models-updated', properties: {} }),
+    });
+    const after = Date.now();
+
+    expect(updates).toHaveLength(2);
+    expect(updates[0]).toBe(123);
+    expect(updates[1]).toBeGreaterThanOrEqual(before);
+    expect(updates[1]).toBeLessThanOrEqual(after);
+    unsubscribe();
+  });
 });

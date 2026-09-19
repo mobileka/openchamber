@@ -57,6 +57,16 @@ type AgentMemoryChangedEvent = {
   projectId?: string;
 };
 
+/**
+ * The published model list changed. Carries only when it changed: listeners
+ * re-read the notice from the server, so the event cannot go stale between
+ * being sent and being handled.
+ */
+type CommandcodeModelsUpdatedEvent = {
+  type: 'commandcode-models-updated';
+  changedAt: number;
+};
+
 type OpenChamberEvent =
   | { type: 'event-stream-ready' }
   | MessageQueueUpdatedEvent
@@ -64,12 +74,17 @@ type OpenChamberEvent =
   | SessionCreatedEvent
   | WorktreeChangedEvent
   | BrowserControlRequestEvent
-  | AgentMemoryChangedEvent;
+  | AgentMemoryChangedEvent
+  | CommandcodeModelsUpdatedEvent;
 type Listener = (event: OpenChamberEvent) => void;
 
 const worktreeChangedPropertiesSchema = z.object({
   directories: z.array(z.string().min(1)).min(1),
   at: z.number().optional(),
+});
+
+const commandcodeModelsUpdatedPropertiesSchema = z.object({
+  changedAt: z.number().finite().optional(),
 });
 
 let eventSource: EventSource | null = null;
@@ -174,6 +189,19 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
       ...(typeof properties?.projectId === 'string' && properties.projectId.length > 0
         ? { projectId: properties.projectId }
         : {}),
+    };
+    for (const listener of listeners) {
+      listener(nextEvent);
+    }
+    return;
+  }
+
+  if (envelope.type === 'openchamber:commandcode-models-updated') {
+    const parsed = commandcodeModelsUpdatedPropertiesSchema.safeParse(envelope.properties);
+    if (!parsed.success) return;
+    const nextEvent: CommandcodeModelsUpdatedEvent = {
+      type: 'commandcode-models-updated',
+      changedAt: parsed.data.changedAt ?? Date.now(),
     };
     for (const listener of listeners) {
       listener(nextEvent);

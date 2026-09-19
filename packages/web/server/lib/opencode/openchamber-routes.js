@@ -71,6 +71,8 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
     fetchFreeZenModels,
     getCachedZenModels,
     desktopUpdater,
+    commandcodeModelsNotice,
+    emitCommandcodeModelsUpdatedEvent,
   } = dependencies;
 
   let desktopRestartError = null;
@@ -544,6 +546,44 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         const statusCode = error?.name === 'AbortError' ? 504 : 502;
         res.status(statusCode).json({ error: 'Failed to retrieve zen models' });
       }
+    }
+  });
+
+  // The published model list update, written by the scheduled
+  // /commandcode_update_models run. GET is read by every client on startup and
+  // on the `openchamber:commandcode-models-updated` event; the client shows a
+  // toast with the summary and a restart action until the notice is dismissed
+  // or the app restarts through it.
+  app.get('/api/openchamber/commandcode-models-update', async (_req, res) => {
+    try {
+      res.json({ notice: await commandcodeModelsNotice.read() });
+    } catch (error) {
+      console.error('Failed to read the model list update:', error);
+      res.status(500).json({ error: 'Failed to read the model list update' });
+    }
+  });
+
+  app.post('/api/openchamber/commandcode-models-update', async (req, res) => {
+    try {
+      const notice = await commandcodeModelsNotice.save(req.body ?? {});
+      emitCommandcodeModelsUpdatedEvent?.({ changedAt: notice.changedAt });
+      res.json({ success: true, notice });
+    } catch (error) {
+      if (error?.statusCode === 400) {
+        return res.status(400).json({ error: error.message });
+      }
+      console.error('Failed to store the model list update:', error);
+      res.status(500).json({ error: 'Failed to store the model list update' });
+    }
+  });
+
+  app.post('/api/openchamber/commandcode-models-update/dismiss', async (_req, res) => {
+    try {
+      await commandcodeModelsNotice.clear();
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Failed to dismiss the model list update:', error);
+      res.status(500).json({ error: 'Failed to dismiss the model list update' });
     }
   });
 };

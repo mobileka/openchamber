@@ -36,7 +36,8 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/system-prompt/runtime.js`: opt-in managed OpenCode system-prompt optimizer materialization and plugin injection.
 - `packages/web/server/lib/opencode/managed-plugin-config.js`: the one `OPENCODE_CONFIG_CONTENT` merge every managed plugin (agent tools, system prompt optimizer) appends itself through.
 - `packages/web/server/lib/opencode/server-utils-runtime.js`: shared server runtime utilities for OpenCode proxy wiring, OpenCode port/readiness helpers, and snapshot fetchers.
-- `packages/web/server/lib/opencode/openchamber-routes.js`: OpenChamber update and models metadata route registration.
+- `packages/web/server/lib/opencode/openchamber-routes.js`: OpenChamber update, models metadata, and model list update notice route registration.
+- `packages/web/server/lib/opencode/commandcode-models-notice.js`: on-disk notice for the published model list update, written by the scheduled `/commandcode_update_models` run and read by `openchamber-routes.js`.
 - `packages/web/server/lib/opencode/pwa-manifest-routes.js`: PWA manifest route registration with recent-session shortcut resolution and short-lived caching.
 - `packages/web/server/lib/opencode/project-icon-routes.js`: project icon upload/read/discovery route registration and icon storage orchestration.
 - `packages/web/server/lib/opencode/skill-routes.js`: route registration for skill config CRUD, supporting files, and skills catalog scan/install flows.
@@ -423,6 +424,16 @@ within a ten-minute overall deadline.
       in use" and the update ended with no server.
   - `GET /api/openchamber/models-metadata`
   - `GET /api/zen/models`
+  - `GET /api/openchamber/commandcode-models-update` (returns `{ notice }` where `notice` is the stored model list update or `null`; a stored notice that is malformed or unreadable is a 500, not an empty success)
+  - `POST /api/openchamber/commandcode-models-update` (stores a notice with `summary` and `details`, plus optional `commit`; a payload outside the size limits is a 400. On success it broadcasts `openchamber:commandcode-models-updated` so connected clients re-read the notice)
+  - `POST /api/openchamber/commandcode-models-update/dismiss` (removes the stored notice; the UI clears it on dismiss and on restart)
+
+## Public exports (commandcode-models-notice.js)
+- `createCommandcodeModelsNoticeRuntime({ fs, path, openchamberDataDir, logger })`: creates the notice store behind `<data dir>/commandcode-models-update.json`.
+- Returned API:
+  - `read()`: resolves the stored notice, `null` when the file is missing, and throws for an unreadable or malformed file so callers never treat corruption as "no update".
+  - `save(payload)`: validates `summary`, `details`, and optional `commit`, stamps `changedAt`, and writes through a temporary file and rename so a failed write leaves the previous notice intact. An invalid payload throws with `statusCode: 400`.
+  - `clear()`: removes the notice file; a missing file is not an error.
 
 ## Public exports (pwa-manifest-routes.js)
 - `registerPwaManifestRoute(app, dependencies)`: registers PWA manifest endpoint with dynamic app-name resolution and recent-session shortcuts:
