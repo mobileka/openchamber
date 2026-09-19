@@ -24,7 +24,7 @@ afterEach(() => {
 describe('commandcode model list update client', () => {
   test('reads an empty notice as null', async () => {
     mockFetch(() => Response.json({ notice: null }));
-    await expect(fetchCommandcodeModelsUpdateNotice()).resolves.toBeNull();
+    expect(await fetchCommandcodeModelsUpdateNotice()).toBeNull();
   });
 
   test('parses a stored notice', async () => {
@@ -38,7 +38,7 @@ describe('commandcode model list update client', () => {
       },
     }));
 
-    await expect(fetchCommandcodeModelsUpdateNotice()).resolves.toEqual({
+    expect(await fetchCommandcodeModelsUpdateNotice()).toEqual({
       summary: '3 models added',
       details: '- Added **GLM-5.3 FlashX**',
       commit: 'abc1234',
