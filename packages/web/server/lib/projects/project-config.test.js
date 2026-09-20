@@ -274,7 +274,7 @@ describe('project-config file naming', () => {
 
 describe('project-config loop reconciliation', () => {
   const loop = (name, overrides = {}) => ({
-    scope: 'project',
+    location: 'local',
     filePath: `/repo/.agents/loops/${name}.md`,
     definition: {
       name,
@@ -299,7 +299,7 @@ describe('project-config loop reconciliation', () => {
 
       expect(tasks).toHaveLength(2);
       const digest = tasks.find((task) => task.name === 'daily-digest');
-      expect(digest.id).toBe('loop:project:daily-digest');
+      expect(digest.id).toBe('loop:daily-digest');
       expect(digest.schedule.cron).toBe('0 9 * * *');
       expect(digest.execution.providerID).toBe('openai');
       expect(digest.loopFile).toBe('/repo/.agents/loops/daily-digest.md');
@@ -307,6 +307,28 @@ describe('project-config loop reconciliation', () => {
       const reloaded = await runtime.listScheduledTasks('project-test');
       expect(reloaded).toHaveLength(2);
       expect(reloaded[0].state.createdAt).toBeGreaterThan(0);
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it('preserves the loop execution directory through reconcile', async () => {
+    const { runtime, cleanup } = await createRuntime();
+    try {
+      const tasks = await runtime.reconcileLoopTasks('project-test', [
+        loop('with-dir', {
+          execution: {
+            prompt: 'Runs elsewhere',
+            providerID: 'openai',
+            modelID: 'gpt-4.1',
+            directory: '/tmp/elsewhere',
+          },
+        }),
+      ]);
+
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].execution.directory).toBe('/tmp/elsewhere');
+      expect((await runtime.listScheduledTasks('project-test'))[0].execution.directory).toBe('/tmp/elsewhere');
     } finally {
       await cleanup();
     }
@@ -437,7 +459,7 @@ describe('project-config loop reconciliation', () => {
       const original = first.find((task) => task.name === 'daily-digest');
 
       const renamed = await runtime.reconcileLoopTasks('project-test', [{
-        scope: 'project',
+        location: 'local',
         filePath: '/repo/.agents/loops/daily-digest.md',
         definition: {
           name: 'digest',
@@ -497,7 +519,7 @@ describe('project-config loop reconciliation', () => {
       });
 
       const after = await runtime.reconcileLoopTasks('project-test', [{
-        scope: 'project',
+        location: 'local',
         filePath: '/repo/.agents/loops/daily-digest.md',
         definition: null,
       }]);

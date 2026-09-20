@@ -439,7 +439,7 @@ const handleLocalApiRequest = async (input: RequestInfo | URL, url: URL, init: R
     return bridgeJsonRoute('api:sessions/metadata:set', { sessionId, patch });
   }
 
-  if (/^\/api\/projects\/[^/]+\/scheduled-tasks(?:\/[^/]+)?$/.test(normalizedPathname)) {
+  if (/^\/api\/openchamber\/scheduled-tasks(?:\/|$)/.test(normalizedPathname)) {
     return unsupportedWebRouteResponse('Scheduled tasks');
   }
 

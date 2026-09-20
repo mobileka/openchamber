@@ -2,13 +2,18 @@ import { runtimeFetch } from './runtime-fetch';
 
 export type ScheduledTaskStatus = 'idle' | 'running' | 'success' | 'error';
 
+export type LoopLocation = 'local' | 'shared';
+
 export type ScheduledTask = {
   id: string;
   name: string;
   enabled: boolean;
-  /** Absolute path of the `.agents/loops/*.md` file driving this task, when
-   *  any. Present only for loop-sourced tasks; unknown to older clients. */
+  /** Absolute path of the `.agents/loops/*.md` file driving this task. */
   loopFile?: string;
+  /** Which fixed loops dir drives this task. Attached by the list endpoint. */
+  location?: LoopLocation;
+  /** Effective execution directory (loop `directory` or the default). Attached by the list endpoint. */
+  runDirectory?: string;
   schedule: {
     kind: 'daily' | 'weekly' | 'once' | 'cron';
     times?: string[];
@@ -24,6 +29,7 @@ export type ScheduledTask = {
     modelID: string;
     variant?: string;
     agent?: string;
+    directory?: string;
     goalEnabled?: boolean;
     goalTokenBudget?: number;
     permissionAutoAccept?: boolean;
@@ -52,17 +58,16 @@ const parseErrorMessage = async (response: Response, fallback: string) => {
   return fallback;
 };
 
-const ensureProjectID = (projectID: string): string => {
-  const trimmed = typeof projectID === 'string' ? projectID.trim() : '';
+const ensureTaskID = (taskID: string): string => {
+  const trimmed = typeof taskID === 'string' ? taskID.trim() : '';
   if (!trimmed) {
-    throw new Error('projectId is required');
+    throw new Error('taskId is required');
   }
   return trimmed;
 };
 
-export const fetchScheduledTasks = async (projectID: string): Promise<ScheduledTask[]> => {
-  const safeProjectID = ensureProjectID(projectID);
-  const response = await runtimeFetch(`/api/projects/${encodeURIComponent(safeProjectID)}/scheduled-tasks`);
+export const fetchScheduledTasks = async (): Promise<ScheduledTask[]> => {
+  const response = await runtimeFetch('/api/openchamber/scheduled-tasks');
   if (!response.ok) {
     throw new Error(await parseErrorMessage(response, 'Failed to load scheduled tasks'));
   }
@@ -73,53 +78,28 @@ export const fetchScheduledTasks = async (projectID: string): Promise<ScheduledT
   return parsed.tasks as ScheduledTask[];
 };
 
-export const upsertScheduledTask = async (projectID: string, task: Partial<ScheduledTask>): Promise<ScheduledTask[]> => {
-  const safeProjectID = ensureProjectID(projectID);
-  const response = await runtimeFetch(`/api/projects/${encodeURIComponent(safeProjectID)}/scheduled-tasks`, {
-    method: 'PUT',
+export const createScheduledTaskFile = async (
+  location: LoopLocation,
+  task: Partial<ScheduledTask>,
+): Promise<ScheduledTask | null> => {
+  const response = await runtimeFetch('/api/openchamber/scheduled-tasks', {
+    method: 'POST',
     headers: {
       'content-type': 'application/json',
       accept: 'application/json',
     },
-    body: JSON.stringify({ task }),
+    body: JSON.stringify({ location, task }),
   });
   if (!response.ok) {
-    throw new Error(await parseErrorMessage(response, 'Failed to save scheduled task'));
+    throw new Error(await parseErrorMessage(response, 'Failed to create scheduled task'));
   }
   const parsed = await response.json().catch(() => null);
-  if (!parsed || !Array.isArray(parsed.tasks)) {
-    return [];
-  }
-  return parsed.tasks as ScheduledTask[];
+  return (parsed?.task as ScheduledTask | undefined) ?? null;
 };
 
-export const deleteScheduledTask = async (projectID: string, taskID: string): Promise<ScheduledTask[]> => {
-  const safeProjectID = ensureProjectID(projectID);
-  const safeTaskID = ensureProjectID(taskID);
-  const response = await runtimeFetch(`/api/projects/${encodeURIComponent(safeProjectID)}/scheduled-tasks/${encodeURIComponent(safeTaskID)}`, {
-    method: 'DELETE',
-    headers: {
-      accept: 'application/json',
-    },
-  });
-  if (!response.ok) {
-    throw new Error(await parseErrorMessage(response, 'Failed to delete scheduled task'));
-  }
-  const parsed = await response.json().catch(() => null);
-  if (!parsed || !Array.isArray(parsed.tasks)) {
-    return [];
-  }
-  return parsed.tasks as ScheduledTask[];
-};
-
-const getLoopFileEndpoint = (projectID: string, taskID: string): string => {
-  const safeProjectID = ensureProjectID(projectID);
-  const safeTaskID = ensureProjectID(taskID);
-  return `/api/projects/${encodeURIComponent(safeProjectID)}/scheduled-tasks/${encodeURIComponent(safeTaskID)}/loop-file`;
-};
-
-export const setLoopScheduledTaskEnabled = async (projectID: string, taskID: string, enabled: boolean): Promise<void> => {
-  const response = await runtimeFetch(getLoopFileEndpoint(projectID, taskID), {
+export const setScheduledTaskEnabled = async (taskID: string, enabled: boolean): Promise<void> => {
+  const safeTaskID = ensureTaskID(taskID);
+  const response = await runtimeFetch(`/api/openchamber/scheduled-tasks/${encodeURIComponent(safeTaskID)}/enabled`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
     body: JSON.stringify({ enabled }),
@@ -129,27 +109,24 @@ export const setLoopScheduledTaskEnabled = async (projectID: string, taskID: str
   }
 };
 
-export const deleteScheduledTaskLoopFile = async (projectID: string, taskID: string): Promise<void> => {
-  const response = await runtimeFetch(getLoopFileEndpoint(projectID, taskID), {
+export const deleteScheduledTaskFile = async (taskID: string): Promise<void> => {
+  const safeTaskID = ensureTaskID(taskID);
+  const response = await runtimeFetch(`/api/openchamber/scheduled-tasks/${encodeURIComponent(safeTaskID)}`, {
     method: 'DELETE',
-    headers: { accept: 'application/json' },
+    headers: {
+      accept: 'application/json',
+    },
   });
   if (!response.ok) {
     throw new Error(await parseErrorMessage(response, 'Failed to delete loop file'));
   }
 };
 
-export const syncScheduledTaskLoops = async (projectID: string): Promise<void> => {
-  await fetchScheduledTasks(projectID);
-};
-
 export const runScheduledTaskNow = async (
-  projectID: string,
   taskID: string,
 ): Promise<{ sessionId?: string; persistError?: string }> => {
-  const safeProjectID = ensureProjectID(projectID);
-  const safeTaskID = ensureProjectID(taskID);
-  const response = await runtimeFetch(`/api/projects/${encodeURIComponent(safeProjectID)}/scheduled-tasks/${encodeURIComponent(safeTaskID)}/run`, {
+  const safeTaskID = ensureTaskID(taskID);
+  const response = await runtimeFetch(`/api/openchamber/scheduled-tasks/${encodeURIComponent(safeTaskID)}/run`, {
     method: 'POST',
     headers: {
       accept: 'application/json',
@@ -165,4 +142,32 @@ export const runScheduledTaskNow = async (
       ? parsed.persistError.trim()
       : undefined,
   };
+};
+
+type ScheduledTasksChangeListener = () => void;
+
+const changeListeners = new Set<ScheduledTasksChangeListener>();
+
+export const subscribeScheduledTaskChanges = (listener: ScheduledTasksChangeListener): (() => void) => {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+};
+
+/**
+ * Re-sync loops server-side (a file save reconciles on list) and tell open
+ * scheduled-tasks surfaces to reload. Used by FilesView after saving a file
+ * under either loops dir.
+ */
+export const refreshScheduledTasks = async (): Promise<ScheduledTask[]> => {
+  const tasks = await fetchScheduledTasks();
+  for (const listener of Array.from(changeListeners)) {
+    try {
+      listener();
+    } catch {
+      // A failing listener must not break the refresh for the rest.
+    }
+  }
+  return tasks;
 };

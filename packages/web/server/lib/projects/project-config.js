@@ -228,6 +228,9 @@ const normalizeExecution = (value) => {
   const modelID = asNonEmptyString(value.modelID);
   const variant = asNonEmptyString(value.variant);
   const agent = asNonEmptyString(value.agent);
+  // Optional loop execution directory (absolute by the time the loop parser
+  // hands it over; `~` is expanded at read time so shared files stay portable).
+  const directory = asNonEmptyString(value.directory);
   const goalEnabled = value.goalEnabled === true;
   const permissionAutoAccept = value.permissionAutoAccept === true;
   const goalTokenBudget = typeof value.goalTokenBudget === 'number'
@@ -252,6 +255,7 @@ const normalizeExecution = (value) => {
     modelID,
     ...(variant ? { variant } : {}),
     ...(agent ? { agent } : {}),
+    ...(directory ? { directory } : {}),
     ...(goalEnabled ? { goalEnabled: true } : {}),
     ...(goalEnabled && goalTokenBudget ? { goalTokenBudget } : {}),
     ...(permissionAutoAccept ? { permissionAutoAccept: true } : {}),
@@ -843,7 +847,7 @@ export const createProjectConfigRuntime = (deps) => {
    *   unschedules a task, so transiently malformed files (mid-edit, bad
    *   merge) never delete tasks or their runtime state.
    * - Loops with no matching task are created under a deterministic
-   *   `loop:<scope>:<name>` id, so runtime state survives restarts.
+   *   `loop:<name>` id, so runtime state survives restarts.
    * - Malformed definitions are skipped with a warning and never block valid
    *   loops; the scheduler passes them as `definition: null` entries, and
    *   normalization failures here are isolated per loop.
@@ -926,7 +930,7 @@ export const createProjectConfigRuntime = (deps) => {
 
       for (const loop of pendingLoops.values()) {
         try {
-          const id = `loop:${loop.scope}:${loop.definition.name}`;
+          const id = `loop:${loop.definition.name}`;
           const created = normalizeTaskForStorage(
             { id, ...loop.definition, loopFile: loop.filePath },
             {
