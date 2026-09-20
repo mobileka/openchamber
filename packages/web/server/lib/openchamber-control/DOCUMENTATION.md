@@ -16,7 +16,8 @@ other.
   the `disabled` boolean and replaces separate enable/disable actions;
   `schedule.list` also returns scheduler status as `scheduler`. Schedule
   actions are project-free (`taskId` only): `schedule.create` writes a loop
-  markdown file and requires `location` (`local` or `shared`) plus a `cron`
+  markdown file: `location` defaults to `local` (`shared` syncs via the shared
+  config) and accepts an optional run `directory`, plus a `cron`
   schedule — `daily`/`weekly`/`once` selectors and goals are rejected.
 - `routes.js` is the authenticated CLI HTTP adapter. It forwards one action,
   preserves service status and partial-result details, and propagates request

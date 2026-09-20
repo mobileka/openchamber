@@ -78,7 +78,7 @@ describe('OpenChamber control service', () => {
     });
   });
 
-  it('rejects non-cron schedules and missing locations on create', async () => {
+  it('rejects non-cron schedules and invalid locations on create', async () => {
     const { service, scheduledTaskService } = createService();
     await expect(service.execute('schedule.create', {
       location: 'shared',
@@ -88,12 +88,32 @@ describe('OpenChamber control service', () => {
       daily: '09:00',
     })).rejects.toThrow('cron');
     await expect(service.execute('schedule.create', {
+      location: 'everywhere',
       name: 'Daily',
       prompt: 'Run checks',
       model: 'provider/model',
       cron: '0 9 * * *',
     })).rejects.toThrow('location must be local or shared');
     expect(scheduledTaskService.create).not.toHaveBeenCalled();
+  });
+
+  it('defaults a missing location to local on create', async () => {
+    const { service, scheduledTaskService } = createService();
+    scheduledTaskService.create.mockResolvedValue({ task: { id: 'task-1' }, created: true });
+    await expect(service.execute('schedule.create', {
+      name: 'Daily',
+      prompt: 'Run checks',
+      model: 'provider/model',
+      cron: '0 9 * * *',
+      directory: '~/dev/opencode',
+    })).resolves.toEqual({ task: { id: 'task-1' }, created: true });
+    expect(scheduledTaskService.create).toHaveBeenCalledWith({
+      location: 'local',
+      task: expect.objectContaining({
+        name: 'Daily',
+        execution: expect.objectContaining({ directory: '~/dev/opencode' }),
+      }),
+    });
   });
 
   it('includes scheduler status alongside listed tasks', async () => {

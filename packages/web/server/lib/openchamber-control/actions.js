@@ -18,7 +18,7 @@ export const OPENCHAMBER_CONTROL_ACTION_DEFINITIONS = Object.freeze([
   { action: 'session.messages', title: 'Read session messages', description: 'Read text-only messages and current sessionStatus for sessionId; directory and limit 10 are defaults' },
   { action: 'schedule.status', title: 'Check scheduler status', description: 'Check scheduler status; no parameters', agentExposed: false },
   { action: 'schedule.list', title: 'List scheduled tasks', description: 'List loop tasks and scheduler status; no parameters' },
-  { action: 'schedule.create', title: 'Create a scheduled task', description: 'Create a loop file task; requires location (local or shared), name, prompt, model, and cron' },
+  { action: 'schedule.create', title: 'Create a scheduled task', description: 'Create a loop file task; requires name, prompt, model, and cron. Location defaults to local; pass shared to sync it via the shared config. Optional directory, agent, timezone' },
   { action: 'schedule.run', title: 'Run a scheduled task', description: 'Run taskId; no parameters beyond taskId' },
   { action: 'schedule.delete', title: 'Delete a scheduled task', description: 'Delete the taskId loop file; no parameters beyond taskId' },
   { action: 'schedule.toggle', title: 'Enable or disable a scheduled task', description: 'Enable or disable taskId; requires the disabled boolean' },

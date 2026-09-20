@@ -86,7 +86,9 @@ const buildLoopSchedule = (input) => {
 };
 
 const buildLoopTask = (input) => {
-  const location = asNonEmptyString(input.location);
+  // Agents omit location unless the user asked for shared; loops land in
+  // local, matching the dialog preselect. Only an explicit invalid value fails.
+  const location = asNonEmptyString(input.location) || 'local';
   if (location !== 'local' && location !== 'shared') {
     throw new OpenChamberControlError('location must be local or shared', 400);
   }
