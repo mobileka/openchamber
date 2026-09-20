@@ -222,6 +222,8 @@ Run daily.
     // The global document lives at the state dir root, not per-project.
     expect(projectConfigRuntime.resolveProjectConfigPath('scheduled-tasks'))
       .toBe(path.join(tempRoot, 'state', 'scheduled-tasks.json'));
+    // Status exposes the resolved default so the UI can display it exactly.
+    expect(runtime.getStatus().defaultRunDirectory).toBe(path.join(tempRoot, 'work'));
   });
 
   it('unschedules tasks whose loop file was removed', async () => {

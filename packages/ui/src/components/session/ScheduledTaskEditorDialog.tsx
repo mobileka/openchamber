@@ -730,16 +730,18 @@ const CronScheduleSection: React.FC<{
 export function ScheduledTaskEditorDialog(props: {
   open: boolean;
   task: ScheduledTask | null;
-  /** Fixed loop location for creation; displayed read-only, never edited here. */
-  location: LoopLocation | null;
+  /** Exact default run directory label (home shortened to `~`), if resolved. */
+  defaultDirectoryLabel: string | null;
   onOpenChange: (open: boolean) => void;
-  onSave: (draft: Partial<ScheduledTask>) => Promise<void>;
+  onSave: (input: { location: LoopLocation; task: Partial<ScheduledTask> }) => Promise<void>;
 }) {
-  const { open, task, location, onOpenChange, onSave } = props;
+  const { open, task, defaultDirectoryLabel, onOpenChange, onSave } = props;
   // The editor only creates loop files now (existing loops are edited as
   // files); loop files support cron schedules only, so creation is
   // cron-locked and file-unsupported toggles are hidden.
   const isLoopCreate = !task;
+  // New loops land in the local dir unless switched to shared.
+  const [location, setLocation] = React.useState<LoopLocation>('local');
   const { t, locale } = useI18n();
   const loadProviders = useConfigStore((state) => state.loadProviders);
   const loadAgents = useConfigStore((state) => state.loadAgents);
@@ -830,8 +832,10 @@ export function ScheduledTaskEditorDialog(props: {
     setIsDatePickerOpen(false);
     setShowCommandAutocomplete(false);
     setShowFileMention(false);
+    setShowSnippetAutocomplete(false);
     setCommandQuery('');
     setMentionQuery('');
+    setLocation('local');
   }, [open, task, currentProviderID, currentModelID, currentVariant, currentAgentName]);
 
   React.useEffect(() => {
@@ -1201,14 +1205,14 @@ export function ScheduledTaskEditorDialog(props: {
 
     setSaving(true);
     try {
-      await onSave(payload);
+      await onSave({ location, task: payload });
       onOpenChange(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('sessions.scheduledTasks.editor.toast.saveFailed'));
     } finally {
       setSaving(false);
     }
-  }, [draft, isLoopCreate, onOpenChange, onSave, t]);
+  }, [draft, isLoopCreate, location, onOpenChange, onSave, t]);
 
   const descriptionId = React.useId();
   const hasOpenFloatingMenu = React.useCallback(() => {
@@ -1225,15 +1229,31 @@ export function ScheduledTaskEditorDialog(props: {
 
   const formBody = (
     <div className="flex flex-col gap-5">
-                {isLoopCreate && location ? (
-                  <div className="flex items-center gap-2">
-                    <span className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 py-0.5 typography-micro font-medium text-muted-foreground">
-                      {location === 'local'
-                        ? t('sessions.scheduledTasks.dialog.badge.local')
-                        : t('sessions.scheduledTasks.dialog.badge.shared')}
-                    </span>
+                {isLoopCreate ? (
+                  <div className="flex flex-col gap-1">
+                    <FieldLabel>{t('sessions.scheduledTasks.dialog.location.choose')}</FieldLabel>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={location === 'local' ? 'default' : 'outline'}
+                        onClick={() => setLocation('local')}
+                      >
+                        <Icon name="computer" className="mr-1 h-4 w-4" />
+                        {t('sessions.scheduledTasks.dialog.location.local')}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={location === 'shared' ? 'default' : 'outline'}
+                        onClick={() => setLocation('shared')}
+                      >
+                        <Icon name="cloud" className="mr-1 h-4 w-4" />
+                        {t('sessions.scheduledTasks.dialog.location.shared')}
+                      </Button>
+                    </div>
                     <span className="typography-micro text-muted-foreground">
-                      {t('sessions.scheduledTasks.editor.locationNote')}
+                      {t('sessions.scheduledTasks.dialog.location.hint')}
                     </span>
                   </div>
                 ) : null}
@@ -1606,7 +1626,9 @@ export function ScheduledTaskEditorDialog(props: {
                 ...prev,
                 execution: { ...prev.execution, directory: event.target.value },
               }))}
-              placeholder={t('sessions.scheduledTasks.editor.directory.placeholder')}
+              placeholder={defaultDirectoryLabel
+                ? t('sessions.scheduledTasks.editor.directory.placeholderWithDefault', { dir: defaultDirectoryLabel })
+                : t('sessions.scheduledTasks.editor.directory.placeholder')}
               className="w-full"
             />
           </div>

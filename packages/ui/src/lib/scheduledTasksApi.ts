@@ -144,6 +144,36 @@ export const runScheduledTaskNow = async (
   };
 };
 
+export type SchedulerStatus = {
+  hasEnabledScheduledTasks: boolean;
+  hasRunningScheduledTasks: boolean;
+  enabledScheduledTasksCount: number;
+  runningScheduledTasksCount: number;
+  /** Server-resolved default run directory (absolute). */
+  defaultRunDirectory?: string;
+};
+
+export const fetchScheduledTasksStatus = async (): Promise<SchedulerStatus> => {
+  const response = await runtimeFetch('/api/openchamber/scheduled-tasks/status');
+  if (!response.ok) {
+    throw new Error(await parseErrorMessage(response, 'Failed to load scheduler status'));
+  }
+  const parsed = await response.json().catch(() => null);
+  return {
+    hasEnabledScheduledTasks: parsed?.hasEnabledScheduledTasks === true,
+    hasRunningScheduledTasks: parsed?.hasRunningScheduledTasks === true,
+    enabledScheduledTasksCount: typeof parsed?.enabledScheduledTasksCount === 'number'
+      ? parsed.enabledScheduledTasksCount
+      : 0,
+    runningScheduledTasksCount: typeof parsed?.runningScheduledTasksCount === 'number'
+      ? parsed.runningScheduledTasksCount
+      : 0,
+    ...(typeof parsed?.defaultRunDirectory === 'string' && parsed.defaultRunDirectory.length > 0
+      ? { defaultRunDirectory: parsed.defaultRunDirectory }
+      : {}),
+  };
+};
+
 type ScheduledTasksChangeListener = () => void;
 
 const changeListeners = new Set<ScheduledTasksChangeListener>();

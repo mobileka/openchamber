@@ -1032,6 +1032,7 @@ export const createScheduledTasksRuntime = (deps) => {
       hasRunningScheduledTasks: runningCountSnapshot > 0,
       enabledScheduledTasksCount: enabledCount,
       runningScheduledTasksCount: runningCountSnapshot,
+      defaultRunDirectory: runDirectoryFallback,
     };
   };
 

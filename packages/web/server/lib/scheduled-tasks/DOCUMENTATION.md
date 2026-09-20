@@ -198,5 +198,6 @@ every `syncLoops`:
   - `DELETE /api/openchamber/scheduled-tasks/:taskId`
   - `PATCH /api/openchamber/scheduled-tasks/:taskId/enabled`
   - `POST /api/openchamber/scheduled-tasks/:taskId/run`
-  - `GET /api/openchamber/scheduled-tasks/status`
+  - `GET /api/openchamber/scheduled-tasks/status` (also reports the
+    server-resolved `defaultRunDirectory`, shown verbatim in the UI)
   - `GET /api/openchamber/events`
