@@ -1,10 +1,13 @@
 name: Personal macOS Release
 
-# Fork-only release channel: builds an unsigned macOS arm64 bundle when run
-# manually and publishes it as a GitHub release. The desktop app stages
+# Fork-only release channel: builds an unsigned macOS arm64 bundle on every
+# merge to personal and publishes it as a GitHub release. The desktop app stages
 # that release into its builds directory and applies it through the /Applications
 # symlink, so macOS code signing and notarization are intentionally not used.
 on:
+  push:
+    branches:
+      - personal
   workflow_dispatch:
 
 permissions:
@@ -139,7 +142,7 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: Personal ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
           generate_release_notes: true
           draft: false
           prerelease: false
