@@ -18,6 +18,7 @@ import {
   createScheduledTaskFile,
   deleteScheduledTaskFile,
   fetchScheduledTasks,
+  fetchScheduledTasksStatus,
   runScheduledTaskNow,
   setScheduledTaskEnabled,
   subscribeScheduledTaskChanges,
@@ -193,8 +194,7 @@ export function ScheduledTasksDialog() {
   // not an empty flash before the fetch effect runs.
   const [loading, setLoading] = React.useState(true);
   const [editorOpen, setEditorOpen] = React.useState(false);
-  const [choosingLocation, setChoosingLocation] = React.useState(false);
-  const [pendingLocation, setPendingLocation] = React.useState<LoopLocation | null>(null);
+  const [defaultDirectory, setDefaultDirectory] = React.useState<string | null>(null);
   const [mutatingTaskID, setMutatingTaskID] = React.useState<string | null>(null);
 
   const reloadTasks = React.useCallback(async (options?: { silent?: boolean }) => {
@@ -219,8 +219,12 @@ export function ScheduledTasksDialog() {
     if (!open) {
       return;
     }
-    setChoosingLocation(false);
     void reloadTasks();
+    // The exact default run directory is server-resolved; show it verbatim in
+    // the editor instead of a vague label.
+    fetchScheduledTasksStatus()
+      .then((status) => setDefaultDirectory(status.defaultRunDirectory ?? null))
+      .catch(() => setDefaultDirectory(null));
   }, [open, reloadTasks]);
 
   React.useEffect(() => {
@@ -254,15 +258,11 @@ export function ScheduledTasksDialog() {
     };
   }, [open, reloadTasks]);
 
-  const handleSaveTask = React.useCallback(async (taskDraft: Partial<ScheduledTask>) => {
-    if (!pendingLocation) {
-      throw new Error(t('sessions.scheduledTasks.dialog.location.choose'));
-    }
-    await createScheduledTaskFile(pendingLocation, taskDraft);
-    setPendingLocation(null);
+  const handleSaveTask = React.useCallback(async (input: { location: LoopLocation; task: Partial<ScheduledTask> }) => {
+    await createScheduledTaskFile(input.location, input.task);
     await reloadTasks();
     toast.success(t('sessions.scheduledTasks.dialog.toast.saved'));
-  }, [pendingLocation, reloadTasks, t]);
+  }, [reloadTasks, t]);
 
   const handleToggleEnabled = React.useCallback(async (task: ScheduledTask, enabled: boolean) => {
     setMutatingTaskID(task.id);
@@ -335,11 +335,21 @@ export function ScheduledTasksDialog() {
     }
   }, [reloadTasks, t]);
 
-  const openNewTaskEditor = (location: LoopLocation) => {
-    setPendingLocation(location);
-    setChoosingLocation(false);
+  const openNewTaskEditor = () => {
     setEditorOpen(true);
   };
+
+  // Display the server-resolved default with the home dir shortened to `~`.
+  const defaultDirectoryLabel = React.useMemo(() => {
+    if (!defaultDirectory) {
+      return null;
+    }
+    const home = homeDirectory || '';
+    if (home && (defaultDirectory === home || defaultDirectory.startsWith(`${home}/`))) {
+      return `~${defaultDirectory.slice(home.length)}`;
+    }
+    return defaultDirectory;
+  }, [defaultDirectory, homeDirectory]);
 
   const locationBadge = (task: ScheduledTask) => {
     if (task.location !== 'local' && task.location !== 'shared') {
@@ -353,30 +363,6 @@ export function ScheduledTasksDialog() {
       </span>
     );
   };
-
-  const locationChooser = choosingLocation ? (
-    <div className="rounded-lg border border-border p-3">
-      <div className="typography-ui-label font-medium text-foreground">
-        {t('sessions.scheduledTasks.dialog.location.choose')}
-      </div>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="outline" onClick={() => openNewTaskEditor('local')}>
-          <Icon name="computer" className="mr-1 h-4 w-4" />
-          {t('sessions.scheduledTasks.dialog.location.local')}
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => openNewTaskEditor('shared')}>
-          <Icon name="cloud" className="mr-1 h-4 w-4" />
-          {t('sessions.scheduledTasks.dialog.location.shared')}
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => setChoosingLocation(false)}>
-          {t('sessions.scheduledTasks.editor.actions.cancel')}
-        </Button>
-      </div>
-      <div className="typography-micro mt-2 text-muted-foreground">
-        {t('sessions.scheduledTasks.dialog.location.hint')}
-      </div>
-    </div>
-  ) : null;
 
   const tasksList = (
       <div className="min-h-[280px]">
@@ -544,7 +530,6 @@ export function ScheduledTasksDialog() {
 
   const tasksContent = (
     <div className="space-y-4">
-      {locationChooser}
       {tasksList}
     </div>
   );
@@ -571,7 +556,7 @@ export function ScheduledTasksDialog() {
           footer={(
             <Button
               className="w-full"
-              onClick={() => setChoosingLocation(true)}
+              onClick={openNewTaskEditor}
             >
               <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
             </Button>
@@ -588,7 +573,7 @@ export function ScheduledTasksDialog() {
             {/* Pages have no close button: you leave by picking a session,
                 a draft, or another surface in the sidebar. */}
             <div className="flex items-center px-6 pt-3">
-              <Button size="sm" onClick={() => setChoosingLocation(true)}>
+              <Button size="sm" onClick={openNewTaskEditor}>
                 <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
               </Button>
             </div>
@@ -604,7 +589,7 @@ export function ScheduledTasksDialog() {
       <ScheduledTaskEditorDialog
         open={editorOpen}
         task={null}
-        location={pendingLocation}
+        defaultDirectoryLabel={defaultDirectoryLabel}
         onOpenChange={setEditorOpen}
         onSave={handleSaveTask}
       />

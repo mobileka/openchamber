@@ -17,7 +17,7 @@ If a local and a shared loop share a file name, the local one wins.
 ## Create a task
 
 1. Open the scheduled tasks dialog from the session sidebar.
-2. Press **New task** and pick **Local** or **Shared**. The location is fixed afterwards — it decides which directory the file is written to.
+2. Press **New task**, pick **Local** (preselected, this machine only) or **Shared** (synced via git) right in the dialog.
 3. Give it a name (becomes the `<name>.md` file), a cron expression for when it runs, the provider, model, and agent to use, and optionally a working directory (defaults to the synced repo root). The prompt can be a slash command, like `/review`.
 4. Save, and make sure the task is enabled.
 
