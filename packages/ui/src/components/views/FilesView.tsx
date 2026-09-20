@@ -87,8 +87,7 @@ import { isEditableEventTarget } from '@/hooks/keyboard-shortcut-dom';
 import { formatShortcutForDisplay, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import { useI18n } from '@/lib/i18n';
 import { sessionEvents } from '@/lib/sessionEvents';
-import { syncScheduledTaskLoops } from '@/lib/scheduledTasksApi';
-import { useProjectsStore } from '@/stores/useProjectsStore';
+import { refreshScheduledTasks } from '@/lib/scheduledTasksApi';
 
 type FileNode = {
   name: string;
@@ -884,7 +883,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   }, [openPaths, root, selectedPath, setSelectedPath]);
 
   const selectedFileIsOutsideWorkspace = Boolean(root && selectedFilePath && !isPathWithinRoot(selectedFilePath, root));
-  const selectedOutsideFileGrant = selectedFileIsOutsideWorkspace ? getOutsideFileGrant(selectedFilePath) : undefined;
+  const editableOutsidePaths = useFilesViewTabsStore((state) => (root ? (state.byRoot[root]?.editableOutsidePaths ?? EMPTY_PATHS) : EMPTY_PATHS));
+  const isSelectedEditableOutside = Boolean(selectedFilePath
+    && selectedFileIsOutsideWorkspace
+    && editableOutsidePaths.some((candidate) => toComparablePath(candidate) === toComparablePath(selectedFilePath)));  const selectedOutsideFileGrant = selectedFileIsOutsideWorkspace ? getOutsideFileGrant(selectedFilePath) : undefined;
   const selectedFileReadOptions = React.useMemo(
     () => ({
       allowOutsideWorkspace: mode === 'editor-only' && selectedFileIsOutsideWorkspace,
@@ -1709,14 +1711,14 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           sessionEvents.requestGitRefresh({ directory: root, paths: [relativePath] });
         }
       }
-      if (root && /(?:^|\/)\.agents\/loops\/[^/]+\.md$/i.test(normalizePath(selectedFile.path))) {
-        const project = useProjectsStore.getState().projects.find((entry) => normalizePath(entry.path) === normalizePath(root));
-        if (project) {
-          try {
-            await syncScheduledTaskLoops(project.id);
-          } catch {
-            toast.error(t('sessions.scheduledTasks.dialog.toast.updateFailed'));
-          }
+      if (/(?:^|\/)\.agents\/loops\/[^/]+\.md$/i.test(normalizePath(selectedFile.path))) {
+        // Either fixed loops dir (local ~/.agents/loops or the shared
+        // $OPENCODE_CONFIG_DIR/.agents/loops): re-sync server-side and tell
+        // open scheduled-tasks surfaces to reload.
+        try {
+          await refreshScheduledTasks();
+        } catch {
+          toast.error(t('sessions.scheduledTasks.dialog.toast.updateFailed'));
         }
       }
       if (selectedFile?.path && isDrawioFile(selectedFile.path)) {
@@ -2455,7 +2457,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const canCopyPath = Boolean(selectedFile && displaySelectedPath.length > 0);
   // Keep image/SVG on the preview path: `isBinaryFile` excludes `.svg`, so binary
   // alone would flip canEdit/isTextFile true and show a dead edit toggle + no-op Save.
-  const canEdit = Boolean(selectedFile && !selectedFileIsOutsideWorkspace && !isSelectedBinary && !isSelectedImage && files.writeFile);
+  const canEdit = Boolean(selectedFile && (!selectedFileIsOutsideWorkspace || isSelectedEditableOutside) && !isSelectedBinary && !isSelectedImage && files.writeFile);
   const isMarkdown = Boolean(selectedFile?.path && isMarkdownFile(selectedFile.path));
   const isJson = Boolean(selectedFile?.path && isJsonFile(selectedFile.path));
   const isHtml = Boolean(selectedFile?.path && isHtmlFile(selectedFile.path));

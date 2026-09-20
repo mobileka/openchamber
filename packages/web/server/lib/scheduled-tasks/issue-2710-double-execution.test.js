@@ -95,7 +95,6 @@ const createSharedProjectConfigRuntime = (initialTask) => {
 
 const createRuntimeDeps = (projectConfigRuntime) => ({
   projectConfigRuntime,
-  listProjects: vi.fn(async () => [{ id: 'p1', path: '/repo' }]),
   buildOpenCodeUrl: () => 'http://127.0.0.1:9999/',
   getOpenCodeAuthHeaders: () => ({}),
   waitForOpenCodeReady: async () => {},
@@ -234,7 +233,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
     expect(runtime.getStatus().hasRunningScheduledTasks).toBe(false);
 
     // Manual runNow must not be stuck behind a permanently "running" claim failure.
-    const manual = await runtime.runNow('p1', 'task-1');
+    const manual = await runtime.runNow('task-1');
     expect(manual.ok).toBe(true);
     expect(sdk.sessionCreates.length).toBe(1);
 
@@ -266,7 +265,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
     expect(sdk.sessionCreates.length).toBe(1);
     expect(runtime.getStatus().runningScheduledTasksCount).toBe(0);
 
-    const manual = await runtime.runNow('p1', 'task-1');
+    const manual = await runtime.runNow('task-1');
     expect(manual.ok).toBe(true);
     expect(manual.sessionID).toBeTruthy();
     expect(runtime.getStatus().runningScheduledTasksCount).toBe(0);
@@ -290,7 +289,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
       return originalUpdate(pid, tid, patch);
     });
 
-    const manual = await runtime.runNow('p1', 'task-1');
+    const manual = await runtime.runNow('task-1');
     expect(manual.ok).toBe(true);
     expect(manual.sessionID).toBeTruthy();
     expect(manual.reason).toBe('completion-state-failed');
@@ -313,7 +312,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
       throw new Error('timeout acquiring project config lock for p1');
     });
 
-    const manual = await runtime.runNow('p1', 'task-1');
+    const manual = await runtime.runNow('task-1');
     expect(manual.ok).toBe(false);
     expect(manual.reason).toBe('start-state-failed');
     expect(sdk.sessionCreates.length).toBe(0);
@@ -498,7 +497,7 @@ describe('issue 2710: daily scheduled task double execution at the configured ti
     await vi.advanceTimersByTimeAsync(HOUR + 3_000);
     expect(sdk.sessionCreates.length).toBe(0);
 
-    const manual = await runtime.runNow('p1', 'task-1');
+    const manual = await runtime.runNow('task-1');
     expect(manual.ok).toBe(true);
     expect(manual.sessionID).toBeTruthy();
     expect(sdk.sessionCreates.length).toBe(1);

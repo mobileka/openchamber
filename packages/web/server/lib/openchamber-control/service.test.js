@@ -21,12 +21,11 @@ const createService = (overrides = {}) => {
   };
   const scheduledTaskService = {
     status: vi.fn(async () => ({ enabledScheduledTasksCount: 0 })),
-    resolveProjectID: vi.fn(async () => 'project-1'),
     list: vi.fn(async () => []),
-    upsert: vi.fn(),
+    create: vi.fn(),
     run: vi.fn(),
-    remove: vi.fn(),
-    setEnabled: vi.fn(),
+    removeLoopFile: vi.fn(),
+    setLoopEnabled: vi.fn(),
   };
   const service = createOpenChamberControlService({
     readSettingsFromDiskMigrated: vi.fn(async () => ({
@@ -61,28 +60,60 @@ describe('OpenChamber control service', () => {
 
   it('maps schedule creation into the shared scheduled-task service', async () => {
     const { service, scheduledTaskService } = createService();
-    scheduledTaskService.upsert.mockResolvedValue({ task: { id: 'task-1' }, created: true });
+    scheduledTaskService.create.mockResolvedValue({ task: { id: 'task-1' }, created: true });
     await expect(service.execute('schedule.create', {
-      directory: '/repo',
+      location: 'shared',
       name: 'Daily',
       prompt: 'Run checks',
       model: 'provider/model',
-      daily: ' 09:00 ',
-      goal: true,
-      goalTokenBudget: 5000,
+      cron: '0 9 * * *',
     })).resolves.toEqual({ task: { id: 'task-1' }, created: true });
-    expect(scheduledTaskService.resolveProjectID).toHaveBeenCalledWith({ projectId: undefined, directory: '/repo' });
-    expect(scheduledTaskService.upsert).toHaveBeenCalledWith('project-1', expect.objectContaining({
-      name: 'Daily',
-      schedule: { kind: 'daily', times: ['09:00'] },
-      execution: expect.objectContaining({ providerID: 'provider', modelID: 'model', goalEnabled: true, goalTokenBudget: 5000 }),
-    }));
+    expect(scheduledTaskService.create).toHaveBeenCalledWith({
+      location: 'shared',
+      task: expect.objectContaining({
+        name: 'Daily',
+        schedule: { kind: 'cron', cron: '0 9 * * *' },
+        execution: expect.objectContaining({ providerID: 'provider', modelID: 'model' }),
+      }),
+    });
   });
 
-  it('does not combine an explicit schedule project with the tool context directory', async () => {
+  it('rejects non-cron schedules and invalid locations on create', async () => {
     const { service, scheduledTaskService } = createService();
-    await service.execute('schedule.list', { projectId: ' project-1 ' }, '/current-session');
-    expect(scheduledTaskService.resolveProjectID).toHaveBeenCalledWith({ projectId: 'project-1', directory: undefined });
+    await expect(service.execute('schedule.create', {
+      location: 'shared',
+      name: 'Daily',
+      prompt: 'Run checks',
+      model: 'provider/model',
+      daily: '09:00',
+    })).rejects.toThrow('cron');
+    await expect(service.execute('schedule.create', {
+      location: 'everywhere',
+      name: 'Daily',
+      prompt: 'Run checks',
+      model: 'provider/model',
+      cron: '0 9 * * *',
+    })).rejects.toThrow('location must be local or shared');
+    expect(scheduledTaskService.create).not.toHaveBeenCalled();
+  });
+
+  it('defaults a missing location to local on create', async () => {
+    const { service, scheduledTaskService } = createService();
+    scheduledTaskService.create.mockResolvedValue({ task: { id: 'task-1' }, created: true });
+    await expect(service.execute('schedule.create', {
+      name: 'Daily',
+      prompt: 'Run checks',
+      model: 'provider/model',
+      cron: '0 9 * * *',
+      directory: '~/dev/opencode',
+    })).resolves.toEqual({ task: { id: 'task-1' }, created: true });
+    expect(scheduledTaskService.create).toHaveBeenCalledWith({
+      location: 'local',
+      task: expect.objectContaining({
+        name: 'Daily',
+        execution: expect.objectContaining({ directory: '~/dev/opencode' }),
+      }),
+    });
   });
 
   it('includes scheduler status alongside listed tasks', async () => {
@@ -96,19 +127,18 @@ describe('OpenChamber control service', () => {
 
   it('toggles a scheduled task through the required disabled boolean', async () => {
     const { service, scheduledTaskService } = createService();
-    scheduledTaskService.setEnabled.mockResolvedValue({ id: 'task-1', enabled: false });
+    scheduledTaskService.setLoopEnabled.mockResolvedValue({ id: 'task-1', enabled: false });
     await expect(service.execute('schedule.toggle', { taskId: 'task-1' }, '/repo')).rejects.toThrow('disabled is required for schedule.toggle');
     await expect(service.execute('schedule.toggle', { taskId: 'task-1', disabled: true }, '/repo')).resolves.toEqual({
       task: { id: 'task-1', enabled: false },
       enabled: false,
     });
-    expect(scheduledTaskService.setEnabled).toHaveBeenCalledWith('project-1', 'task-1', false);
+    expect(scheduledTaskService.setLoopEnabled).toHaveBeenCalledWith('task-1', false);
   });
 
-  it('returns an actionable taskId error before resolving schedule scope', async () => {
+  it('returns an actionable taskId error without touching the task service', async () => {
     const { service, scheduledTaskService } = createService();
     await expect(service.execute('schedule.run', {}, '/repo')).rejects.toThrow('taskId is required');
-    expect(scheduledTaskService.resolveProjectID).not.toHaveBeenCalled();
     expect(scheduledTaskService.run).not.toHaveBeenCalled();
   });
 

@@ -109,6 +109,12 @@ describe('managed agent tool runtime', () => {
       'Wait for current session activity to become idle. Omit by default; use only when the user asks or the next step requires the completed result',
     );
     expect(hooks.tool.openchamber.args.parameters.properties.sessionId).toEqual({ type: 'string' });
+    expect(hooks.tool.openchamber.args.parameters.properties.location).toEqual({
+      type: 'string',
+      enum: ['local', 'shared'],
+      description: expect.stringContaining('schedule.create'),
+    });
+    expect(hooks.tool.openchamber.args.parameters.properties.directory.description).toContain('schedule.create');
     expect(source).not.toContain('title: "OpenChamber"');
     expect(source).not.toContain('@opencode-ai/plugin');
     expect(source).not.toContain(preparedEnv.OPENCHAMBER_AGENT_TOOL_TOKEN);

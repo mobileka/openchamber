@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Checkbox } from '@/components/ui/checkbox';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { toast } from '@/components/ui';
@@ -9,27 +8,26 @@ import type { IconName } from "@/components/icon/icons";
 import { useUIStore } from '@/stores/useUIStore';
 import { formatTimeForPreference } from '@/lib/timeFormat';
 import type { TimeFormatPreference } from '@/stores/useUIStore';
-import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { refreshGlobalSessions } from '@/stores/useGlobalSessionsStore';
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
-import { PROJECT_COLOR_MAP, PROJECT_ICON_MAP, ProjectIconImage } from '@/lib/projectMeta';
-import { useThemeSystem } from '@/contexts/useThemeSystem';
-import { cn, formatDirectoryName } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
-import type { ProjectEntry } from '@/lib/api/types';
 import {
-  deleteScheduledTask,
-  deleteScheduledTaskLoopFile,
+  createScheduledTaskFile,
+  deleteScheduledTaskFile,
   fetchScheduledTasks,
+  fetchScheduledTasksStatus,
   runScheduledTaskNow,
-  setLoopScheduledTaskEnabled,
-  upsertScheduledTask,
+  setScheduledTaskEnabled,
+  subscribeScheduledTaskChanges,
+  type LoopLocation,
   type ScheduledTask,
   type ScheduledTaskStatus,
 } from '@/lib/scheduledTasksApi';
 import { ScheduledTaskEditorDialog } from './ScheduledTaskEditorDialog';
+import { ensureOutsideFileGrantForDesktop } from '@/lib/outsideFileGrants';
 import { canonicalizeTimezone } from '@/lib/timezones';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 
@@ -169,85 +167,43 @@ const toneStyle = (tone: StatusTone): React.CSSProperties => {
   };
 };
 
+const sortTasks = (tasks: ScheduledTask[]): ScheduledTask[] => {
+  const next = tasks.slice();
+  next.sort((a, b) => {
+    if (a.enabled !== b.enabled) {
+      return a.enabled ? -1 : 1;
+    }
+    const byName = a.name.localeCompare(b.name);
+    if (byName !== 0) {
+      return byName;
+    }
+    return (a.state?.nextRunAt || Number.MAX_SAFE_INTEGER) - (b.state?.nextRunAt || Number.MAX_SAFE_INTEGER);
+  });
+  return next;
+};
+
 export function ScheduledTasksDialog() {
   const { t } = useI18n();
   const open = useUIStore((state) => state.isScheduledTasksDialogOpen);
   const setOpen = useUIStore((state) => state.setScheduledTasksDialogOpen);
   const isMobile = useUIStore((state) => state.isMobile);
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
-  const projects = useProjectsStore((state) => state.projects);
-  const activeProject = useProjectsStore((state) => state.getActiveProject());
   const homeDirectory = useDirectoryStore((state) => state.homeDirectory);
-  const { currentTheme } = useThemeSystem();
 
-  const [selectedProjectID, setSelectedProjectID] = React.useState<string>('');
   const [tasks, setTasks] = React.useState<ScheduledTask[]>([]);
   // Start in loading state so the first frame after open shows the spinner,
-  // not an empty/select-project flash before the fetch effect runs.
+  // not an empty flash before the fetch effect runs.
   const [loading, setLoading] = React.useState(true);
   const [editorOpen, setEditorOpen] = React.useState(false);
-  const [editorTask, setEditorTask] = React.useState<ScheduledTask | null>(null);
+  const [defaultDirectory, setDefaultDirectory] = React.useState<string | null>(null);
   const [mutatingTaskID, setMutatingTaskID] = React.useState<string | null>(null);
 
-  const selectedProject = React.useMemo(
-    () => projects.find((project) => project.id === selectedProjectID) || null,
-    [projects, selectedProjectID],
-  );
-
-  const renderProjectLabel = React.useCallback((project: ProjectEntry) => {
-    const displayLabel = project.label?.trim() || formatDirectoryName(project.path, homeDirectory || undefined);
-    const projectIconName = project.icon ? PROJECT_ICON_MAP[project.icon] : null;
-    const iconColor = project.color ? PROJECT_COLOR_MAP[project.color] : undefined;
-    const fallbackIcon = projectIconName ? (
-      <Icon name={projectIconName} className="h-3.5 w-3.5 shrink-0" style={iconColor ? { color: iconColor } : undefined} />
-    ) : (
-      <Icon name="folder" className="h-3.5 w-3.5 shrink-0 text-muted-foreground/80"  style={iconColor ? { color: iconColor } : undefined}/>
-    );
-
-    return (
-      <span className="inline-flex min-w-0 items-center gap-1.5">
-        {project.iconImage ? (
-          <span
-            className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center overflow-hidden rounded-[3px]"
-            style={project.iconBackground ? { backgroundColor: project.iconBackground } : undefined}
-          >
-            <ProjectIconImage
-              project={{ id: project.id, iconImage: project.iconImage ?? null }}
-              options={{
-                themeVariant: currentTheme.metadata.variant,
-                iconColor: currentTheme.colors.surface.foreground,
-              }}
-              className="h-full w-full object-contain"
-              fallback={fallbackIcon}
-            />
-          </span>
-        ) : fallbackIcon}
-        <span className="truncate">{displayLabel}</span>
-      </span>
-    );
-  }, [homeDirectory, currentTheme.metadata.variant, currentTheme.colors.surface.foreground]);
-
-  const reloadTasks = React.useCallback(async (projectID: string, options?: { silent?: boolean }) => {
-    if (!projectID) {
-      setTasks([]);
-      return;
-    }
+  const reloadTasks = React.useCallback(async (options?: { silent?: boolean }) => {
     if (!options?.silent) {
       setLoading(true);
     }
     try {
-      const nextTasks = await fetchScheduledTasks(projectID);
-      nextTasks.sort((a, b) => {
-        if (a.enabled !== b.enabled) {
-          return a.enabled ? -1 : 1;
-        }
-        const byName = a.name.localeCompare(b.name);
-        if (byName !== 0) {
-          return byName;
-        }
-        return (a.state?.nextRunAt || Number.MAX_SAFE_INTEGER) - (b.state?.nextRunAt || Number.MAX_SAFE_INTEGER);
-      });
-      setTasks(nextTasks);
+      setTasks(sortTasks(await fetchScheduledTasks()));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('sessions.scheduledTasks.dialog.toast.loadFailed'));
       if (!options?.silent) {
@@ -264,123 +220,106 @@ export function ScheduledTasksDialog() {
     if (!open) {
       return;
     }
-    const preferredProjectID = activeProject?.id || projects[0]?.id || '';
-    setSelectedProjectID(preferredProjectID);
-    if (preferredProjectID) {
-      void reloadTasks(preferredProjectID);
-    } else {
-      setTasks([]);
-      setLoading(false);
-    }
-  }, [open, activeProject, projects, reloadTasks]);
+    void reloadTasks();
+    // The exact default run directory is server-resolved; show it verbatim in
+    // the editor instead of a vague label.
+    fetchScheduledTasksStatus()
+      .then((status) => setDefaultDirectory(status.defaultRunDirectory ?? null))
+      .catch(() => setDefaultDirectory(null));
+  }, [open, reloadTasks]);
 
   React.useEffect(() => {
     if (!open) {
       return;
     }
     let timeoutID: ReturnType<typeof setTimeout> | null = null;
-    const unsubscribe = subscribeOpenchamberEvents((event) => {
-      if (event.type !== 'scheduled-task-ran') {
-        return;
-      }
-      if (event.projectId !== selectedProjectID) {
-        return;
-      }
+    const scheduleReload = () => {
       if (timeoutID) {
         clearTimeout(timeoutID);
       }
       timeoutID = setTimeout(() => {
-        void reloadTasks(selectedProjectID, { silent: true });
+        void reloadTasks({ silent: true });
       }, 400);
+    };
+    const unsubscribeEvents = subscribeOpenchamberEvents((event) => {
+      if (event.type !== 'scheduled-task-ran') {
+        return;
+      }
+      scheduleReload();
+    });
+    const unsubscribeChanges = subscribeScheduledTaskChanges(() => {
+      scheduleReload();
     });
     return () => {
       if (timeoutID) {
         clearTimeout(timeoutID);
       }
-      unsubscribe();
+      unsubscribeEvents();
+      unsubscribeChanges();
     };
-  }, [open, selectedProjectID, reloadTasks]);
+  }, [open, reloadTasks]);
 
-  const handleSaveTask = React.useCallback(async (taskDraft: Partial<ScheduledTask>) => {
-    if (!selectedProjectID) {
-      throw new Error(t('sessions.scheduledTasks.dialog.error.chooseProjectFirst'));
-    }
-    await upsertScheduledTask(selectedProjectID, taskDraft);
-    await reloadTasks(selectedProjectID);
+  const handleSaveTask = React.useCallback(async (input: { location: LoopLocation; task: Partial<ScheduledTask> }) => {
+    await createScheduledTaskFile(input.location, input.task);
+    await reloadTasks();
     toast.success(t('sessions.scheduledTasks.dialog.toast.saved'));
-  }, [selectedProjectID, reloadTasks, t]);
+  }, [reloadTasks, t]);
 
   const handleToggleEnabled = React.useCallback(async (task: ScheduledTask, enabled: boolean) => {
-    if (!selectedProjectID) {
-      return;
-    }
     setMutatingTaskID(task.id);
     setTasks((prev) => prev.map((item) => (item.id === task.id ? { ...item, enabled } : item)));
     try {
-      if (task.loopFile) {
-        await setLoopScheduledTaskEnabled(selectedProjectID, task.id, enabled);
-      } else {
-        await upsertScheduledTask(selectedProjectID, { ...task, enabled });
-      }
-      await reloadTasks(selectedProjectID, { silent: true });
+      await setScheduledTaskEnabled(task.id, enabled);
+      await reloadTasks({ silent: true });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('sessions.scheduledTasks.dialog.toast.updateFailed'));
-      await reloadTasks(selectedProjectID, { silent: true });
+      await reloadTasks({ silent: true });
     } finally {
       setMutatingTaskID(null);
     }
-  }, [selectedProjectID, reloadTasks, t]);
+  }, [reloadTasks, t]);
 
   const handleDeleteTask = React.useCallback(async (task: ScheduledTask) => {
-    if (!selectedProjectID) {
-      return;
-    }
-    const confirmed = window.confirm(task.loopFile
-      ? t('sessions.scheduledTasks.dialog.confirm.deleteLoopFile', { taskName: task.name })
-      : t('sessions.scheduledTasks.dialog.confirm.deleteTask', { taskName: task.name }));
+    const confirmed = window.confirm(
+      t('sessions.scheduledTasks.dialog.confirm.deleteLoopFile', { taskName: task.name }));
     if (!confirmed) {
       return;
     }
 
     setMutatingTaskID(task.id);
     try {
-      if (task.loopFile) {
-        await deleteScheduledTaskLoopFile(selectedProjectID, task.id);
-      } else {
-        await deleteScheduledTask(selectedProjectID, task.id);
-      }
-      await reloadTasks(selectedProjectID, { silent: true });
+      await deleteScheduledTaskFile(task.id);
+      await reloadTasks({ silent: true });
       toast.success(t('sessions.scheduledTasks.dialog.toast.deleted'));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('sessions.scheduledTasks.dialog.toast.deleteFailed'));
     } finally {
       setMutatingTaskID(null);
     }
-  }, [selectedProjectID, reloadTasks, t]);
+  }, [reloadTasks, t]);
 
-  const handleEditTask = React.useCallback((task: ScheduledTask) => {
+  const handleEditTask = React.useCallback(async (task: ScheduledTask) => {
     if (!task.loopFile) {
-      setEditorTask(task);
-      setEditorOpen(true);
       return;
     }
-    if (!selectedProject?.path) {
+    const anchor = task.runDirectory || homeDirectory || null;
+    if (!anchor) {
       return;
     }
+    // Loop files live outside every workspace by design; mint the outside-file
+    // grant first like every other outside-file flow, or the read 403s.
+    await ensureOutsideFileGrantForDesktop(task.loopFile, anchor);
     setOpen(false);
-    useFilesViewTabsStore.getState().setSelectedPath(selectedProject.path, task.loopFile, { allowOutsideRoot: true });
-    useUIStore.getState().openContextFile(selectedProject.path, task.loopFile);
-  }, [selectedProject?.path, setOpen]);
+    useFilesViewTabsStore.getState().setSelectedPath(anchor, task.loopFile, { allowOutsideRoot: true, editableOutsideRoot: true });
+    useUIStore.getState().openContextFile(anchor, task.loopFile);
+  }, [homeDirectory, setOpen]);
 
   const handleRunNow = React.useCallback(async (task: ScheduledTask) => {
-    if (!selectedProjectID) {
-      return;
-    }
     setMutatingTaskID(task.id);
     try {
-      const { sessionId, persistError } = await runScheduledTaskNow(selectedProjectID, task.id);
+      const { sessionId, persistError } = await runScheduledTaskNow(task.id);
       await Promise.all([
-        reloadTasks(selectedProjectID, { silent: true }),
+        reloadTasks({ silent: true }),
         refreshGlobalSessions(),
       ]);
       if (persistError) {
@@ -391,62 +330,42 @@ export function ScheduledTasksDialog() {
       if (sessionId) {
         // Jump straight into the started session; selecting it also closes
         // this surface (MainLayout closes surfaces on session selection).
-        const project = projects.find((entry) => entry.id === selectedProjectID);
-        useSessionUIStore.getState().setCurrentSession(sessionId, project?.path ?? null);
+        useSessionUIStore.getState().setCurrentSession(sessionId, task.runDirectory ?? null);
         }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t('sessions.scheduledTasks.dialog.toast.runFailed'));
     } finally {
       setMutatingTaskID(null);
     }
-  }, [selectedProjectID, projects, reloadTasks, t]);
-
-  const projectSelector = (
-    <div className="flex flex-col items-start gap-1">
-      <span className="typography-meta text-muted-foreground">{t('sessions.scheduledTasks.dialog.project.label')}</span>
-      <Select
-        value={selectedProjectID || '__none'}
-        onValueChange={(value) => {
-          const nextProjectID = value === '__none' ? '' : value;
-          setSelectedProjectID(nextProjectID);
-          if (nextProjectID) {
-            void reloadTasks(nextProjectID);
-          } else {
-            setTasks([]);
-          }
-        }}
-      >
-        <SelectTrigger size="lg" className={isMobile ? 'w-full' : undefined}>
-          {selectedProject ? (
-            <SelectValue>{renderProjectLabel(selectedProject)}</SelectValue>
-          ) : (
-            <SelectValue placeholder={t('sessions.scheduledTasks.dialog.project.placeholder')} />
-          )}
-        </SelectTrigger>
-        <SelectContent>
-          {projects.length === 0 ? <SelectItem value="__none">{t('sessions.scheduledTasks.dialog.project.empty')}</SelectItem> : null}
-          {projects.map((project) => (
-            <SelectItem key={project.id} value={project.id}>
-              {renderProjectLabel(project)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
+  }, [reloadTasks, t]);
 
   const openNewTaskEditor = () => {
-    setEditorTask(null);
     setEditorOpen(true);
   };
 
-  const selectProject = (nextProjectID: string) => {
-    setSelectedProjectID(nextProjectID);
-    if (nextProjectID) {
-      void reloadTasks(nextProjectID);
-    } else {
-      setTasks([]);
+  // Display the server-resolved default with the home dir shortened to `~`.
+  const defaultDirectoryLabel = React.useMemo(() => {
+    if (!defaultDirectory) {
+      return null;
     }
+    const home = homeDirectory || '';
+    if (home && (defaultDirectory === home || defaultDirectory.startsWith(`${home}/`))) {
+      return `~${defaultDirectory.slice(home.length)}`;
+    }
+    return defaultDirectory;
+  }, [defaultDirectory, homeDirectory]);
+
+  const locationBadge = (task: ScheduledTask) => {
+    if (task.location !== 'local' && task.location !== 'shared') {
+      return null;
+    }
+    return (
+      <span className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 py-0.5 typography-micro font-medium text-muted-foreground">
+        {task.location === 'local'
+          ? t('sessions.scheduledTasks.dialog.badge.local')
+          : t('sessions.scheduledTasks.dialog.badge.shared')}
+      </span>
+    );
   };
 
   const tasksList = (
@@ -457,7 +376,7 @@ export function ScheduledTasksDialog() {
         </div>
       ) : tasks.length === 0 ? (
         <div className="rounded-lg border border-dashed border-border p-4 typography-meta text-muted-foreground">
-          {selectedProjectID ? t('sessions.scheduledTasks.dialog.empty.noTasks') : t('sessions.scheduledTasks.dialog.empty.selectProject')}
+          {t('sessions.scheduledTasks.dialog.empty.noTasks')}
         </div>
       ) : (
         <div className="space-y-2.5">
@@ -483,8 +402,11 @@ export function ScheduledTasksDialog() {
                 )}
               >
                 <div className={cn('min-w-0', !task.enabled && 'opacity-60')}>
-                  <div className="typography-ui-header truncate font-semibold text-foreground">
-                    {task.name}
+                  <div className="flex items-center gap-2">
+                    <div className="typography-ui-header min-w-0 flex-1 truncate font-semibold text-foreground">
+                      {task.name}
+                    </div>
+                    {locationBadge(task)}
                   </div>
                   <div className="typography-micro truncate text-muted-foreground">
                     {formatSchedule(task, t)}
@@ -586,7 +508,7 @@ export function ScheduledTasksDialog() {
                       variant="outline"
                       size="sm"
                       onClick={() => handleEditTask(task)}
-                      disabled={isBusy}
+                      disabled={isBusy || !task.loopFile}
                       aria-label={t('sessions.scheduledTasks.dialog.actions.editAria', { taskName: task.name })}
                     >
                       <Icon name="edit-2" className="h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.edit')}
@@ -612,7 +534,6 @@ export function ScheduledTasksDialog() {
 
   const tasksContent = (
     <div className="space-y-4">
-      {projectSelector}
       {tasksList}
     </div>
   );
@@ -640,7 +561,6 @@ export function ScheduledTasksDialog() {
             <Button
               className="w-full"
               onClick={openNewTaskEditor}
-              disabled={!selectedProjectID}
             >
               <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
             </Button>
@@ -650,46 +570,20 @@ export function ScheduledTasksDialog() {
         </MobileOverlayPanel>
       ) : open ? (
         // Full-page surface replacing the chat area (mounted inside <main>).
-        // Master-detail: a scrollable project filter panel at the left, the
-        // selected project's tasks at the right. The app Header shows the
-        // surface title, so the page itself only carries the close affordance.
+        // The app Header shows the surface title, so the page itself only
+        // carries the close affordance.
         <div className="absolute inset-0 z-10 flex flex-col bg-background">
-          <div className="flex min-h-0 flex-1">
-            <div className="flex w-60 flex-shrink-0 flex-col border-r border-border/50">
-              <div className="flex-1 space-y-0.5 overflow-y-auto p-2">
-                {projects.length === 0 ? (
-                  <div className="px-2 py-2 typography-meta text-muted-foreground">
-                    {t('sessions.scheduledTasks.dialog.project.empty')}
-                  </div>
-                ) : projects.map((project) => (
-                  <button
-                    key={project.id}
-                    type="button"
-                    onClick={() => selectProject(project.id)}
-                    className={cn(
-                      'flex w-full min-w-0 items-center rounded-md px-2 py-1.5 text-left typography-ui-label focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50',
-                      selectedProjectID === project.id
-                        ? 'bg-interactive-selection text-foreground'
-                        : 'text-muted-foreground hover:bg-interactive-hover/50 hover:text-foreground',
-                    )}
-                  >
-                    {renderProjectLabel(project)}
-                  </button>
-                ))}
-              </div>
+          <div className="flex min-h-0 flex-1 flex-col">
+            {/* Pages have no close button: you leave by picking a session,
+                a draft, or another surface in the sidebar. */}
+            <div className="flex items-center px-6 pt-3">
+              <Button size="sm" onClick={openNewTaskEditor}>
+                <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
+              </Button>
             </div>
-            <div className="flex min-w-0 flex-1 flex-col">
-              {/* Pages have no close button: you leave by picking a session,
-                  a draft, or another surface in the sidebar. */}
-              <div className="flex items-center px-6 pt-3">
-                <Button size="sm" onClick={openNewTaskEditor} disabled={!selectedProjectID}>
-                  <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
-                </Button>
-              </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
-                <div className="mx-auto w-full max-w-3xl">
-                  {tasksList}
-                </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
+              <div className="mx-auto w-full max-w-3xl">
+                {tasksContent}
               </div>
             </div>
           </div>
@@ -698,7 +592,8 @@ export function ScheduledTasksDialog() {
 
       <ScheduledTaskEditorDialog
         open={editorOpen}
-        task={editorTask}
+        task={null}
+        defaultDirectoryLabel={defaultDirectoryLabel}
         onOpenChange={setEditorOpen}
         onSave={handleSaveTask}
       />

@@ -91,6 +91,7 @@ function parseArgs(argv = process.argv.slice(2)) {
     lan: false,
     apiOnly: false,
     project: undefined,
+    location: undefined,
     task: undefined,
     session: undefined,
     message: undefined,
@@ -255,6 +256,12 @@ function parseArgs(argv = process.argv.slice(2)) {
         const { value, nextIndex } = consumeValue(i, inlineValue);
         i = nextIndex;
         options.project = typeof value === 'string' ? value : options.project;
+        break;
+      }
+      case 'location': {
+        const { value, nextIndex } = consumeValue(i, inlineValue);
+        i = nextIndex;
+        options.location = typeof value === 'string' ? value : options.location;
         break;
       }
       case 'dir':

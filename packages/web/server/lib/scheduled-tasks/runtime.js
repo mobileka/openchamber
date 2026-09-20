@@ -3,17 +3,28 @@ import { DateTime } from 'luxon';
 import parser from 'cron-parser';
 import { expandSnippets } from '../opencode/snippets.js';
 import { buildGoalIntroText, createSessionGoal } from '../session-goal/create.js';
-import { discoverLoops } from './loops.js';
+import { discoverLoops, resolveDefaultRunDirectory } from './loops.js';
+
+/**
+ * Project-free scheduled-task runtime.
+ *
+ * Loops are discovered from the two fixed `.agents/loops` dirs (local +
+ * shared) and reconciled into the single global state document
+ * `$OPENCHAMBER_DATA_DIR/scheduled-tasks.json` (store id `scheduled-tasks`),
+ * which is machine-local and never shared. There is no project connection:
+ * every run executes in the loop's own `directory` frontmatter value, or in
+ * the default run directory (the parent of $OPENCODE_CONFIG_DIR).
+ */
 
 const DEFAULT_GLOBAL_CONCURRENCY = 4;
-const DEFAULT_PROJECT_CONCURRENCY = 2;
 const DEFAULT_MAX_RUN_MS = 30 * 60 * 1000;
 const JITTER_MAX_MS = 2_000;
 const TASK_TITLE_MAX_LENGTH = 120;
 const TASK_DUE_SLACK_MS = 5_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
-const buildTaskKey = (projectID, taskID) => `${projectID}:${taskID}`;
+/** Store id of the single global scheduled-tasks document. */
+export const GLOBAL_SCHEDULED_TASKS_ID = 'scheduled-tasks';
 
 const parseTimeParts = (time) => {
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(typeof time === 'string' ? time : '');
@@ -248,7 +259,6 @@ export const formatScheduledSessionTitle = (task, nowMs = Date.now()) => {
 export const createScheduledTasksRuntime = (deps) => {
   const {
     projectConfigRuntime,
-    listProjects,
     buildOpenCodeUrl,
     getOpenCodeAuthHeaders,
     waitForOpenCodeReady,
@@ -257,51 +267,32 @@ export const createScheduledTasksRuntime = (deps) => {
     sessionKnowledgeRuntime = null,
     logger = console,
     maxGlobalConcurrency = DEFAULT_GLOBAL_CONCURRENCY,
-    maxProjectConcurrency = DEFAULT_PROJECT_CONCURRENCY,
     maxRunDurationMs = DEFAULT_MAX_RUN_MS,
+    defaultRunDirectory,
   } = deps;
 
+  const runDirectoryFallback = typeof defaultRunDirectory === 'string' && defaultRunDirectory.trim().length > 0
+    ? defaultRunDirectory
+    : resolveDefaultRunDirectory();
+
   let started = false;
-  const tasksByProject = new Map();
-  const projectPathByID = new Map();
-  const timersByTaskKey = new Map();
-  const queuedTaskKeys = new Set();
-  const runningTaskKeys = new Set();
-  const runningCountByProject = new Map();
-  let runningGlobalCount = 0;
+  const tasksByID = new Map();
+  const timersByTaskID = new Map();
+  const queuedTaskIDs = new Set();
+  const runningTaskIDs = new Set();
+  let runningCount = 0;
   const queue = [];
 
-  const clearTimerForKey = (taskKey) => {
-    const timer = timersByTaskKey.get(taskKey);
+  const clearTimerForID = (taskID) => {
+    const timer = timersByTaskID.get(taskID);
     if (timer) {
       clearTimeout(timer);
-      timersByTaskKey.delete(taskKey);
+      timersByTaskID.delete(taskID);
     }
   };
 
-  const clearProjectTimers = (projectID) => {
-    const tasks = tasksByProject.get(projectID);
-    if (!tasks) {
-      return;
-    }
-    for (const task of tasks.values()) {
-      clearTimerForKey(buildTaskKey(projectID, task.id));
-      queuedTaskKeys.delete(buildTaskKey(projectID, task.id));
-    }
-  };
-
-  const setProjectTasks = (projectID, tasks) => {
-    clearProjectTimers(projectID);
-    const taskMap = new Map();
-    for (const task of tasks) {
-      taskMap.set(task.id, task);
-    }
-    tasksByProject.set(projectID, taskMap);
-  };
-
-  const scheduleTask = (projectID, taskID, nextRunAt) => {
-    const taskKey = buildTaskKey(projectID, taskID);
-    clearTimerForKey(taskKey);
+  const scheduleTask = (taskID, nextRunAt) => {
+    clearTimerForID(taskID);
 
     if (!started) {
       return;
@@ -318,35 +309,30 @@ export const createScheduledTasksRuntime = (deps) => {
 
     const timer = setTimeout(async () => {
       if (delay > MAX_TIMER_DELAY_MS) {
-        scheduleTask(projectID, taskID, nextRunAt);
+        scheduleTask(taskID, nextRunAt);
         return;
       }
 
-      clearTimerForKey(taskKey);
-      const taskMap = tasksByProject.get(projectID);
-      const task = taskMap?.get(taskID);
+      clearTimerForID(taskID);
+      const task = tasksByID.get(taskID);
       if (!task || !task.enabled) {
         return;
       }
-      queueTaskRun(projectID, taskID, 'scheduled', nextRunAt);
+      queueTaskRun(taskID, 'scheduled', nextRunAt);
       pumpQueue();
     }, boundedDelay);
 
-    timersByTaskKey.set(taskKey, timer);
+    timersByTaskID.set(taskID, timer);
   };
 
-  const updateInMemoryTask = (projectID, nextTask) => {
+  const updateInMemoryTask = (nextTask) => {
     if (!nextTask) {
       return;
     }
-    const taskMap = tasksByProject.get(projectID);
-    if (!taskMap) {
-      return;
-    }
-    taskMap.set(nextTask.id, nextTask);
+    tasksByID.set(nextTask.id, nextTask);
   };
 
-  const syncTaskSchedule = async (projectID, task) => {
+  const syncTaskSchedule = async (task) => {
     if (!task) {
       return;
     }
@@ -355,113 +341,68 @@ export const createScheduledTasksRuntime = (deps) => {
       nextRunAt: Number.isFinite(nextRunAt) ? nextRunAt : undefined,
       updatedAt: Date.now(),
     };
-    const result = await projectConfigRuntime.updateScheduledTaskState(projectID, task.id, statePatch);
+    const result = await projectConfigRuntime.updateScheduledTaskState(GLOBAL_SCHEDULED_TASKS_ID, task.id, statePatch);
     if (result.task) {
-      updateInMemoryTask(projectID, result.task);
+      updateInMemoryTask(result.task);
       if (result.task.enabled && Number.isFinite(result.task.state?.nextRunAt)) {
-        scheduleTask(projectID, result.task.id, result.task.state.nextRunAt);
+        scheduleTask(result.task.id, result.task.state.nextRunAt);
       }
     }
   };
 
-  const ensureProjectPath = async (projectID) => {
-    if (projectPathByID.has(projectID)) {
-      return projectPathByID.get(projectID) || null;
-    }
-
-    try {
-      const projects = await listProjects();
-      const project = projects.find((item) => item?.id === projectID && item?.path);
-      if (project?.path) {
-        projectPathByID.set(projectID, project.path);
-        return project.path;
-      }
-    } catch {
-    }
-
-    return null;
+  const resolveRunDirectory = (task) => {
+    const configured = typeof task?.execution?.directory === 'string' ? task.execution.directory.trim() : '';
+    return configured || runDirectoryFallback;
   };
 
-  const syncProject = async (projectID) => {
-    await ensureProjectPath(projectID);
-    const projectPath = projectPathByID.get(projectID) || null;
+  const syncLoops = async () => {
+    // Reconcile the `.agents/loops` definitions with the persisted task list:
+    // loop files are authoritative while present, removed files unschedule
+    // their task, and runtime state is preserved (see loops.js).
+    const loops = await discoverLoops();
+    const reconciled = await projectConfigRuntime.reconcileLoopTasks(GLOBAL_SCHEDULED_TASKS_ID, loops);
 
-    let tasks;
-    if (projectPath) {
-      // Reconcile `.agents/loops` definitions with the persisted task list:
-      // loop files are authoritative while present, removed files unschedule
-      // their task, and runtime state is preserved (see loops.js).
-      const loops = await discoverLoops(projectPath);
-      tasks = await projectConfigRuntime.reconcileLoopTasks(projectID, loops);
-    } else {
-      tasks = await projectConfigRuntime.listScheduledTasks(projectID);
+    // Attach the effective execution directory here so every consumer (API,
+    // UI anchors) agrees with where runs actually execute. Unknown to older
+    // readers, preserved verbatim like loopFile.
+    const tasks = reconciled.map((task) => ({
+      ...task,
+      runDirectory: resolveRunDirectory(task),
+    }));
+
+    for (const [taskID] of tasksByID) {
+      if (!tasks.some((task) => task.id === taskID)) {
+        clearTimerForID(taskID);
+        queuedTaskIDs.delete(taskID);
+      }
     }
-
-    setProjectTasks(projectID, tasks);
+    tasksByID.clear();
+    for (const task of tasks) {
+      tasksByID.set(task.id, task);
+    }
 
     for (const task of tasks) {
-      await syncTaskSchedule(projectID, task);
+      await syncTaskSchedule(task);
     }
 
     return tasks;
   };
 
-  const syncAllProjects = async () => {
-    const projects = await listProjects();
-    const activeProjectIDs = new Set();
-    projectPathByID.clear();
-    for (const project of projects) {
-      if (!project?.id || !project?.path) {
-        continue;
-      }
-      activeProjectIDs.add(project.id);
-      projectPathByID.set(project.id, project.path);
-    }
-
-    for (const existingProjectID of Array.from(tasksByProject.keys())) {
-      if (!activeProjectIDs.has(existingProjectID)) {
-        clearProjectTimers(existingProjectID);
-        tasksByProject.delete(existingProjectID);
-      }
-    }
-
-    for (const projectID of activeProjectIDs) {
-      try {
-        await syncProject(projectID);
-      } catch (error) {
-        // One project's config being unusable (a broken file, a lock timeout)
-        // must not keep every other project's tasks from being scheduled.
-        logger.warn?.('[ScheduledTasks] failed to sync project', {
-          projectID,
-          error: error?.message ?? String(error),
-        });
-      }
-    }
-  };
-
-  const queueTaskRun = (projectID, taskID, reason, scheduledFor) => {
-    const taskKey = buildTaskKey(projectID, taskID);
-    if (queuedTaskKeys.has(taskKey) || runningTaskKeys.has(taskKey)) {
+  const queueTaskRun = (taskID, reason, scheduledFor) => {
+    if (queuedTaskIDs.has(taskID) || runningTaskIDs.has(taskID)) {
       return;
     }
-    queuedTaskKeys.add(taskKey);
+    queuedTaskIDs.add(taskID);
     queue.push({
-      projectID,
       taskID,
       reason,
       ...(Number.isFinite(scheduledFor) ? { scheduledFor } : {}),
     });
   };
 
-  const canRunTask = (projectID) => {
-    if (runningGlobalCount >= maxGlobalConcurrency) {
-      return false;
-    }
-    const projectRunning = runningCountByProject.get(projectID) || 0;
-    return projectRunning < maxProjectConcurrency;
-  };
+  const canRunTask = () => runningCount < maxGlobalConcurrency;
 
-  const buildPromptAsyncPayload = (task, projectPath, knowledgeText = '') => ({
+  const buildPromptAsyncPayload = (task, runDirectory, knowledgeText = '') => ({
     model: {
       providerID: task.execution.providerID,
       modelID: task.execution.modelID,
@@ -475,7 +416,7 @@ export const createScheduledTasksRuntime = (deps) => {
       ...(knowledgeText ? [{ type: 'text', text: knowledgeText, synthetic: true }] : []),
       {
         type: 'text',
-        text: expandSnippets(task.execution.prompt, projectPath),
+        text: expandSnippets(task.execution.prompt, runDirectory),
       },
       ...(task.execution.goalEnabled
         ? [{ type: 'text', text: buildGoalIntroText(task.execution.goalTokenBudget), synthetic: true }]
@@ -483,16 +424,16 @@ export const createScheduledTasksRuntime = (deps) => {
     ],
   });
 
-  const runPromptAsync = async ({ baseUrl, authHeaders, sessionID, projectPath, task }) => {
+  const runPromptAsync = async ({ baseUrl, authHeaders, sessionID, runDirectory, task }) => {
     // Never allowed to fail the run: a task that executes without its
     // background is a lesser loss than a task that does not execute.
     const knowledge = sessionKnowledgeRuntime
-      ? await sessionKnowledgeRuntime.resolvePendingForSession(sessionID, projectPath)
+      ? await sessionKnowledgeRuntime.resolvePendingForSession(sessionID, runDirectory)
         .catch(() => ({ text: '', signature: '' }))
       : { text: '', signature: '' };
 
     const promptUrl = new URL(`${baseUrl}/session/${encodeURIComponent(sessionID)}/prompt_async`);
-    promptUrl.searchParams.set('directory', projectPath);
+    promptUrl.searchParams.set('directory', runDirectory);
     const response = await fetch(promptUrl.toString(), {
       method: 'POST',
       headers: {
@@ -500,7 +441,7 @@ export const createScheduledTasksRuntime = (deps) => {
         'content-type': 'application/json',
         accept: 'application/json',
       },
-      body: JSON.stringify(buildPromptAsyncPayload(task, projectPath, knowledge.text)),
+      body: JSON.stringify(buildPromptAsyncPayload(task, runDirectory, knowledge.text)),
     });
 
     if (!response.ok) {
@@ -511,12 +452,12 @@ export const createScheduledTasksRuntime = (deps) => {
     // Recorded only after the prompt is accepted, so a failed dispatch carries
     // the context again on the next run.
     if (knowledge.text && sessionKnowledgeRuntime) {
-      await sessionKnowledgeRuntime.recordDelivered(sessionID, projectPath, knowledge.signature)
+      await sessionKnowledgeRuntime.recordDelivered(sessionID, runDirectory, knowledge.signature)
         .catch(() => undefined);
     }
   };
 
-  const resolveScheduledCommand = async ({ client, projectPath, task }) => {
+  const resolveScheduledCommand = async ({ client, runDirectory, task }) => {
     const parsed = parseScheduledCommandPrompt(task?.execution?.prompt);
     if (!parsed) {
       return null;
@@ -524,7 +465,7 @@ export const createScheduledTasksRuntime = (deps) => {
 
     let commands = [];
     try {
-      const response = await client.command.list({ directory: projectPath });
+      const response = await client.command.list({ directory: runDirectory });
       commands = Array.isArray(response?.data) ? response.data : [];
     } catch {
       return null;
@@ -534,10 +475,10 @@ export const createScheduledTasksRuntime = (deps) => {
     return command ? { ...parsed, template: command.template } : null;
   };
 
-  const runScheduledCommand = async ({ client, projectPath, sessionID, task, command }) => {
+  const runScheduledCommand = async ({ client, runDirectory, sessionID, task, command }) => {
     await client.session.command({
       sessionID,
-      directory: projectPath,
+      directory: runDirectory,
       command: command.command,
       arguments: command.arguments,
       ...(task.execution.agent ? { agent: task.execution.agent } : {}),
@@ -547,13 +488,10 @@ export const createScheduledTasksRuntime = (deps) => {
 
   };
 
-  const runTaskWithWatchdog = async (projectID, task, reason) => {
+  const runTaskWithWatchdog = async (task, reason) => {
     const startedAt = Date.now();
     const title = formatScheduledSessionTitle(task, startedAt);
-    const projectPath = projectPathByID.get(projectID);
-    if (!projectPath) {
-      throw new Error('project path is unavailable');
-    }
+    const runDirectory = resolveRunDirectory(task);
 
     if (typeof waitForOpenCodeReady === 'function') {
       await waitForOpenCodeReady(10_000, 250);
@@ -567,7 +505,7 @@ export const createScheduledTasksRuntime = (deps) => {
     });
 
     const sessionResponse = await client.session.create({
-      directory: projectPath,
+      directory: runDirectory,
       title,
     });
     const sessionID = sessionResponse?.data?.id;
@@ -577,7 +515,6 @@ export const createScheduledTasksRuntime = (deps) => {
 
     try {
       emitTaskRunEvent?.({
-        projectID,
         taskID: task.id,
         ranAt: startedAt,
         status: 'running',
@@ -591,13 +528,13 @@ export const createScheduledTasksRuntime = (deps) => {
       // is already auto-approved. Enrollment failure must not kill the run —
       // the task still executes, permissions just wait for the user.
       try {
-        await setSessionAutoAccept(sessionID, true, projectPath);
+        await setSessionAutoAccept(sessionID, true, runDirectory);
       } catch (error) {
         logger.warn?.('[scheduled-tasks] failed to enable permission auto-accept for session', sessionID, error?.message ?? error);
       }
     }
 
-    const scheduledCommand = await resolveScheduledCommand({ client, projectPath, task });
+    const scheduledCommand = await resolveScheduledCommand({ client, runDirectory, task });
 
     if (task.execution.goalEnabled) {
       const commandObjective = scheduledCommand
@@ -607,8 +544,8 @@ export const createScheduledTasksRuntime = (deps) => {
         baseUrl,
         authHeaders,
         sessionID,
-        directory: projectPath,
-        objective: commandObjective ?? expandSnippets(task.execution.prompt, projectPath),
+        directory: runDirectory,
+        objective: commandObjective ?? expandSnippets(task.execution.prompt, runDirectory),
         tokenBudget: task.execution.goalTokenBudget,
         providerID: task.execution.providerID,
         modelID: task.execution.modelID,
@@ -617,13 +554,13 @@ export const createScheduledTasksRuntime = (deps) => {
     }
 
     if (scheduledCommand) {
-      await runScheduledCommand({ client, projectPath, sessionID, task, command: scheduledCommand });
+      await runScheduledCommand({ client, runDirectory, sessionID, task, command: scheduledCommand });
     } else {
       await runPromptAsync({
         baseUrl,
         authHeaders,
         sessionID,
-        projectPath,
+        runDirectory,
         task,
       });
     }
@@ -638,15 +575,9 @@ export const createScheduledTasksRuntime = (deps) => {
     };
   };
 
-  const releaseRunningSlot = (projectID, taskKey) => {
-    runningTaskKeys.delete(taskKey);
-    runningGlobalCount = Math.max(0, runningGlobalCount - 1);
-    const nextProjectCount = Math.max(0, (runningCountByProject.get(projectID) || 1) - 1);
-    if (nextProjectCount === 0) {
-      runningCountByProject.delete(projectID);
-    } else {
-      runningCountByProject.set(projectID, nextProjectCount);
-    }
+  const releaseRunningSlot = (taskID) => {
+    runningTaskIDs.delete(taskID);
+    runningCount = Math.max(0, runningCount - 1);
   };
 
   /**
@@ -654,7 +585,7 @@ export const createScheduledTasksRuntime = (deps) => {
    * (delay 0 + jitter) re-enters the claim path immediately and can spin —
    * especially for once tasks where the claim cannot advance nextRunAt.
    */
-  const scheduleFutureRun = (projectID, taskID, nextRunAt, fromMs = Date.now()) => {
+  const scheduleFutureRun = (taskID, nextRunAt, fromMs = Date.now()) => {
     if (!Number.isFinite(nextRunAt)) {
       return false;
     }
@@ -662,12 +593,12 @@ export const createScheduledTasksRuntime = (deps) => {
     if (nextRunAt <= base) {
       return false;
     }
-    scheduleTask(projectID, taskID, nextRunAt);
+    scheduleTask(taskID, nextRunAt);
     return true;
   };
 
-  const rearmFromTaskOrCompute = (projectID, taskID, fallbackTask, fromMs) => {
-    const latest = (tasksByProject.get(projectID)?.get(taskID)) || fallbackTask;
+  const rearmFromTaskOrCompute = (taskID, fallbackTask, fromMs) => {
+    const latest = tasksByID.get(taskID) || fallbackTask;
     if (!latest?.enabled) {
       return;
     }
@@ -675,29 +606,26 @@ export const createScheduledTasksRuntime = (deps) => {
     const persistedNext = latest.state?.nextRunAt;
     // Prefer a still-future persisted slot; never re-arm a past occurrence
     // (that created silent once-task loser loops and claim-failed retry spam).
-    if (scheduleFutureRun(projectID, taskID, persistedNext, base)) {
+    if (scheduleFutureRun(taskID, persistedNext, base)) {
       return;
     }
     const computedNext = computeNextRunAt(latest, base);
-    scheduleFutureRun(projectID, taskID, computedNext, base);
+    scheduleFutureRun(taskID, computedNext, base);
   };
 
-  const runTask = async (projectID, taskID, reason, scheduledFor) => {
-    const taskMap = tasksByProject.get(projectID);
-    const task = taskMap?.get(taskID);
+  const runTask = async (taskID, reason, scheduledFor) => {
+    const task = tasksByID.get(taskID);
     // Manual runNow runs paused tasks too; only scheduled dispatches skip them.
     if (!task || (reason !== 'manual' && !task.enabled)) {
       return { ok: false, skipped: true };
     }
 
-    const taskKey = buildTaskKey(projectID, taskID);
-    if (runningTaskKeys.has(taskKey)) {
+    if (runningTaskIDs.has(taskID)) {
       return { ok: false, running: true };
     }
 
-    runningTaskKeys.add(taskKey);
-    runningGlobalCount += 1;
-    runningCountByProject.set(projectID, (runningCountByProject.get(projectID) || 0) + 1);
+    runningTaskIDs.add(taskID);
+    runningCount += 1;
 
     // Every path that holds the running slot must exit through this finally so
     // lock timeouts / fs errors on claim, manual-start, or completion writes
@@ -705,9 +633,9 @@ export const createScheduledTasksRuntime = (deps) => {
     try {
       const runStartedAt = Date.now();
 
-      // Scheduled dispatches must claim the occurrence in shared project config
-      // before creating a session. Two server instances (e.g. CLI serve + desktop)
-      // each arm their own timer; without this claim both would run (#2710).
+      // Scheduled dispatches must claim the occurrence in shared config
+      // before creating a session. Two server instances (e.g. CLI serve +
+      // desktop) each arm their own timer; without this claim both would run.
       if (reason === 'scheduled') {
         if (!Number.isFinite(scheduledFor)) {
           return { ok: false, skipped: true, reason: 'missing-scheduled-for' };
@@ -747,24 +675,23 @@ export const createScheduledTasksRuntime = (deps) => {
         try {
           if (typeof projectConfigRuntime.updateScheduledTaskStateIf === 'function') {
             claimResult = await projectConfigRuntime.updateScheduledTaskStateIf(
-              projectID,
+              GLOBAL_SCHEDULED_TASKS_ID,
               taskID,
               canClaimOccurrence,
               claimPatch,
             );
           } else {
             // Fallback for older test doubles: unconditional update (single-instance only).
-            claimResult = await projectConfigRuntime.updateScheduledTaskState(projectID, taskID, claimPatch);
+            claimResult = await projectConfigRuntime.updateScheduledTaskState(GLOBAL_SCHEDULED_TASKS_ID, taskID, claimPatch);
             claimResult = { ...claimResult, updated: Boolean(claimResult?.task) };
           }
         } catch (claimError) {
           const message = safeErrorMessage(claimError);
           logger.warn?.('[ScheduledTasks] occurrence claim failed', {
-            projectID,
             taskID,
             error: message,
           });
-          rearmFromTaskOrCompute(projectID, taskID, task, Math.max(runStartedAt, scheduledFor + 1));
+          rearmFromTaskOrCompute(taskID, task, Math.max(runStartedAt, scheduledFor + 1));
 
           // Best-effort record so once tasks are not left enabled-but-inert with
           // no UI signal. Do not clobber a winner that claimed this occurrence.
@@ -776,7 +703,7 @@ export const createScheduledTasksRuntime = (deps) => {
           try {
             if (typeof projectConfigRuntime.updateScheduledTaskStateIf === 'function') {
               const recorded = await projectConfigRuntime.updateScheduledTaskStateIf(
-                projectID,
+                GLOBAL_SCHEDULED_TASKS_ID,
                 taskID,
                 (candidate) => {
                   const lastScheduledFor = candidate.state?.lastScheduledFor;
@@ -791,20 +718,20 @@ export const createScheduledTasksRuntime = (deps) => {
                 claimFailurePatch,
               );
               if (recorded.task) {
-                updateInMemoryTask(projectID, recorded.task);
+                updateInMemoryTask(recorded.task);
               }
             } else {
               const recorded = await projectConfigRuntime.updateScheduledTaskState(
-                projectID,
+                GLOBAL_SCHEDULED_TASKS_ID,
                 taskID,
                 claimFailurePatch,
               );
               if (recorded.task) {
-                updateInMemoryTask(projectID, recorded.task);
+                updateInMemoryTask(recorded.task);
               }
             }
           } catch {
-            updateInMemoryTask(projectID, {
+            updateInMemoryTask({
               ...task,
               state: {
                 ...(task.state || {}),
@@ -818,10 +745,9 @@ export const createScheduledTasksRuntime = (deps) => {
 
         if (!claimResult?.updated) {
           if (claimResult?.task) {
-            updateInMemoryTask(projectID, claimResult.task);
+            updateInMemoryTask(claimResult.task);
             // Loser must not schedule a past nextRunAt (once-task spin).
             rearmFromTaskOrCompute(
-              projectID,
               taskID,
               claimResult.task,
               Math.max(Date.now(), scheduledFor + 1),
@@ -831,23 +757,22 @@ export const createScheduledTasksRuntime = (deps) => {
         }
 
         if (claimResult.task) {
-          updateInMemoryTask(projectID, claimResult.task);
+          updateInMemoryTask(claimResult.task);
         }
       } else {
         try {
-          const startResult = await projectConfigRuntime.updateScheduledTaskState(projectID, taskID, {
+          const startResult = await projectConfigRuntime.updateScheduledTaskState(GLOBAL_SCHEDULED_TASKS_ID, taskID, {
             lastRunAt: runStartedAt,
             lastStatus: 'running',
             lastError: undefined,
             updatedAt: runStartedAt,
           });
           if (startResult.task) {
-            updateInMemoryTask(projectID, startResult.task);
+            updateInMemoryTask(startResult.task);
           }
         } catch (startError) {
           const message = safeErrorMessage(startError);
           logger.warn?.('[ScheduledTasks] manual start state write failed', {
-            projectID,
             taskID,
             error: message,
           });
@@ -861,7 +786,7 @@ export const createScheduledTasksRuntime = (deps) => {
       let errorMessage;
 
       try {
-        const runPromise = runTaskWithWatchdog(projectID, task, reason);
+        const runPromise = runTaskWithWatchdog(task, reason);
         let timeoutID;
         const timeoutPromise = new Promise((_, reject) => {
           timeoutID = setTimeout(() => {
@@ -879,13 +804,12 @@ export const createScheduledTasksRuntime = (deps) => {
         status = 'success';
         logger.info?.(
           '[ScheduledTasks] run completed',
-          { projectID, taskID, status, reason, sessionID, durationMs }
+          { taskID, status, reason, sessionID, durationMs }
         );
       } catch (error) {
         status = 'error';
         errorMessage = safeErrorMessage(error);
         logger.warn?.('[ScheduledTasks] run failed', {
-          projectID,
           taskID,
           reason,
           status,
@@ -897,19 +821,18 @@ export const createScheduledTasksRuntime = (deps) => {
       if (!durationMs) {
         durationMs = Math.max(0, finishedAt - runStartedAt);
       }
-      let latestTask = (tasksByProject.get(projectID)?.get(taskID)) || task;
+      let latestTask = tasksByID.get(taskID) || task;
       const shouldConsumeOneTimeTask = latestTask?.schedule?.kind === 'once' && reason === 'scheduled';
       if (shouldConsumeOneTimeTask && latestTask?.enabled) {
         try {
-          const consumed = await projectConfigRuntime.upsertScheduledTask(projectID, {
+          const consumed = await projectConfigRuntime.upsertScheduledTask(GLOBAL_SCHEDULED_TASKS_ID, {
             ...latestTask,
             enabled: false,
           });
           latestTask = consumed.task || latestTask;
-          updateInMemoryTask(projectID, latestTask);
+          updateInMemoryTask(latestTask);
         } catch (consumeError) {
           logger.warn?.('[ScheduledTasks] failed to consume one-time task', {
-            projectID,
             taskID,
             error: safeErrorMessage(consumeError),
           });
@@ -929,12 +852,11 @@ export const createScheduledTasksRuntime = (deps) => {
 
       let stateResult = { task: null };
       try {
-        stateResult = await projectConfigRuntime.updateScheduledTaskState(projectID, taskID, statePatch);
+        stateResult = await projectConfigRuntime.updateScheduledTaskState(GLOBAL_SCHEDULED_TASKS_ID, taskID, statePatch);
         if (stateResult.task) {
-          updateInMemoryTask(projectID, stateResult.task);
+          updateInMemoryTask(stateResult.task);
           if (stateResult.task.enabled) {
             scheduleFutureRun(
-              projectID,
               taskID,
               stateResult.task.state?.nextRunAt,
               finishedAt,
@@ -944,7 +866,6 @@ export const createScheduledTasksRuntime = (deps) => {
       } catch (persistError) {
         const message = safeErrorMessage(persistError);
         logger.warn?.('[ScheduledTasks] run completion state write failed', {
-          projectID,
           taskID,
           reason,
           error: message,
@@ -964,27 +885,26 @@ export const createScheduledTasksRuntime = (deps) => {
             updatedAt: finishedAt,
           },
         };
-        updateInMemoryTask(projectID, recoveredTask);
+        updateInMemoryTask(recoveredTask);
 
         // Best-effort single retry so persisted lastStatus does not stay 'running'.
         try {
-          const retry = await projectConfigRuntime.updateScheduledTaskState(projectID, taskID, statePatch);
+          const retry = await projectConfigRuntime.updateScheduledTaskState(GLOBAL_SCHEDULED_TASKS_ID, taskID, statePatch);
           if (retry.task) {
-            updateInMemoryTask(projectID, retry.task);
+            updateInMemoryTask(retry.task);
             stateResult = retry;
             if (retry.task.enabled) {
-              scheduleFutureRun(projectID, taskID, retry.task.state?.nextRunAt, finishedAt);
+              scheduleFutureRun(taskID, retry.task.state?.nextRunAt, finishedAt);
             }
           }
         } catch (retryError) {
           logger.warn?.('[ScheduledTasks] run completion state retry failed', {
-            projectID,
             taskID,
             reason,
             error: safeErrorMessage(retryError),
           });
           stateResult = { task: recoveredTask };
-          rearmFromTaskOrCompute(projectID, taskID, recoveredTask, finishedAt);
+          rearmFromTaskOrCompute(taskID, recoveredTask, finishedAt);
         }
 
         // The session already ran — surface persist failure without treating a
@@ -1002,7 +922,6 @@ export const createScheduledTasksRuntime = (deps) => {
 
       try {
         emitTaskRunEvent?.({
-          projectID,
           taskID,
           ranAt: finishedAt,
           status,
@@ -1019,7 +938,7 @@ export const createScheduledTasksRuntime = (deps) => {
         error: errorMessage,
       };
     } finally {
-      releaseRunningSlot(projectID, taskKey);
+      releaseRunningSlot(taskID);
     }
   };
 
@@ -1031,21 +950,19 @@ export const createScheduledTasksRuntime = (deps) => {
     let consumed = false;
     for (let index = 0; index < queue.length; index += 1) {
       const item = queue[index];
-      if (!canRunTask(item.projectID)) {
+      if (!canRunTask()) {
         continue;
       }
 
       queue.splice(index, 1);
       index -= 1;
 
-      const taskKey = buildTaskKey(item.projectID, item.taskID);
-      queuedTaskKeys.delete(taskKey);
+      queuedTaskIDs.delete(item.taskID);
       consumed = true;
 
-      void runTask(item.projectID, item.taskID, item.reason, item.scheduledFor)
+      void runTask(item.taskID, item.reason, item.scheduledFor)
         .catch((error) => {
           logger.warn?.('[ScheduledTasks] queued run rejected', {
-            projectID: item.projectID,
             taskID: item.taskID,
             reason: item.reason,
             error: safeErrorMessage(error),
@@ -1061,16 +978,15 @@ export const createScheduledTasksRuntime = (deps) => {
     }
   };
 
-  const runNow = async (projectID, taskID) => {
-    const taskKey = buildTaskKey(projectID, taskID);
-    if (runningTaskKeys.has(taskKey)) {
+  const runNow = async (taskID) => {
+    if (runningTaskIDs.has(taskID)) {
       return {
         ok: false,
         running: true,
         error: 'task is already running',
       };
     }
-    if (queuedTaskKeys.has(taskKey)) {
+    if (queuedTaskIDs.has(taskID)) {
       return {
         ok: false,
         queued: true,
@@ -1078,7 +994,7 @@ export const createScheduledTasksRuntime = (deps) => {
       };
     }
 
-    return runTask(projectID, taskID, 'manual');
+    return runTask(taskID, 'manual');
   };
 
   const start = async () => {
@@ -1086,7 +1002,7 @@ export const createScheduledTasksRuntime = (deps) => {
       return;
     }
     started = true;
-    await syncAllProjects();
+    await syncLoops();
   };
 
   const stop = () => {
@@ -1094,38 +1010,36 @@ export const createScheduledTasksRuntime = (deps) => {
       return;
     }
     started = false;
-    for (const timer of timersByTaskKey.values()) {
+    for (const timer of timersByTaskID.values()) {
       clearTimeout(timer);
     }
-    timersByTaskKey.clear();
-    queuedTaskKeys.clear();
+    timersByTaskID.clear();
+    queuedTaskIDs.clear();
     queue.length = 0;
   };
 
   const getStatus = () => {
     let enabledCount = 0;
-    for (const taskMap of tasksByProject.values()) {
-      for (const task of taskMap.values()) {
-        if (task?.enabled) {
-          enabledCount += 1;
-        }
+    for (const task of tasksByID.values()) {
+      if (task?.enabled) {
+        enabledCount += 1;
       }
     }
 
-    const runningCount = runningTaskKeys.size;
+    const runningCountSnapshot = runningTaskIDs.size;
     return {
       hasEnabledScheduledTasks: enabledCount > 0,
-      hasRunningScheduledTasks: runningCount > 0,
+      hasRunningScheduledTasks: runningCountSnapshot > 0,
       enabledScheduledTasksCount: enabledCount,
-      runningScheduledTasksCount: runningCount,
+      runningScheduledTasksCount: runningCountSnapshot,
+      defaultRunDirectory: runDirectoryFallback,
     };
   };
 
   return {
     start,
     stop,
-    syncAllProjects,
-    syncProject,
+    syncLoops,
     runNow,
     getStatus,
   };

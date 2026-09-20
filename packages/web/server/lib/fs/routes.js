@@ -525,13 +525,19 @@ export const registerFsRoutes = (app, dependencies) => {
     resolveGitBinaryForSpawn,
     openchamberUserConfigRoot,
     managedChatsRoot,
+    managedLoopRoots = [],
   } = dependencies;
   // Chat worktrees may live outside every project workspace; both managed
-  // roots stay valid filesystem targets.
+  // roots stay valid filesystem targets. Loop files are the same category:
+  // the two fixed loops dirs live outside every project workspace by design,
+  // so scheduler edits resolve through them with no grant token.
   const chatsRoot = typeof managedChatsRoot === 'string' && managedChatsRoot.trim()
     ? path.resolve(managedChatsRoot.trim())
     : path.join(openchamberUserConfigRoot, 'chats');
-  const managedRoots = [path.resolve(openchamberUserConfigRoot), chatsRoot];
+  const loopRoots = (Array.isArray(managedLoopRoots) ? managedLoopRoots : [])
+    .filter((root) => typeof root === 'string' && root.trim())
+    .map((root) => path.resolve(root.trim()));
+  const managedRoots = [path.resolve(openchamberUserConfigRoot), chatsRoot, ...loopRoots];
   const realpathCache = createRealpathCache({
     realpath: fsPromises.realpath.bind(fsPromises),
   });

@@ -517,6 +517,19 @@ const projectConfigRuntime = createProjectConfigRuntime({
   projectsDirPath: OPENCHAMBER_PROJECTS_CONFIG_DIR,
 });
 
+/**
+ * Store for the single project-free scheduled-tasks document
+ * (`$OPENCHAMBER_DATA_DIR/scheduled-tasks.json`, store id `scheduled-tasks`).
+ * Same file lock / write queue / CAS machinery as project configs, pointed at
+ * the data dir root instead of the projects dir. Machine-local and never
+ * shared — only the `.agents/loops` markdown definitions are synced.
+ */
+const scheduledTasksConfigRuntime = createProjectConfigRuntime({
+  fsPromises,
+  path,
+  projectsDirPath: OPENCHAMBER_DATA_DIR,
+});
+
 const projectContextRuntime = createProjectContextRuntime({
   fsPromises,
   path,
@@ -1291,11 +1304,7 @@ const refreshOpenCodeAfterConfigChange = (...args) => openCodeLifecycleRuntime.r
 const startHealthMonitoring = () => openCodeLifecycleRuntime.startHealthMonitoring(HEALTH_CHECK_INTERVAL);
 const triggerHealthCheck = () => openCodeLifecycleRuntime.triggerHealthCheck();
 const scheduledTasksRuntime = createScheduledTasksRuntime({
-  projectConfigRuntime,
-  listProjects: async () => {
-    const settings = await readSettingsFromDiskMigrated();
-    return sanitizeProjects(settings?.projects || []);
-  },
+  projectConfigRuntime: scheduledTasksConfigRuntime,
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   waitForOpenCodeReady,
@@ -1307,7 +1316,6 @@ const scheduledTasksRuntime = createScheduledTasksRuntime({
         writeSseEvent(client, {
           type: 'openchamber:scheduled-task-ran',
           properties: {
-            projectId: event.projectID,
             taskId: event.taskID,
             ranAt: event.ranAt,
             status: event.status,
@@ -1399,10 +1407,8 @@ const commandcodeModelsNoticeRuntime = createCommandcodeModelsNoticeRuntime({
   logger: console,
 });
 const scheduledTaskService = createScheduledTaskService({
-  readSettingsFromDiskMigrated,
-  sanitizeProjects,
-  projectConfigRuntime,
   scheduledTasksRuntime,
+  validateDirectoryPath,
 });
 const openChamberSessionService = createOpenChamberSessionService({
   readSettingsFromDiskMigrated,

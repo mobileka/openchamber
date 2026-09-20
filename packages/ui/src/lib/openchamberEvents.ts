@@ -6,7 +6,7 @@ import { z } from 'zod';
 
 type ScheduledTaskRanEvent = {
   type: 'scheduled-task-ran';
-  projectId: string;
+  projectId?: string;
   taskId: string;
   ranAt: number;
   status: 'running' | 'success' | 'error';
@@ -274,18 +274,16 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
   }
 
   const properties = getEventProperties(envelope.properties);
-  const projectId = typeof properties?.projectId === 'string' ? properties.projectId : '';
   const taskId = typeof properties?.taskId === 'string' ? properties.taskId : '';
   const ranAt = typeof properties?.ranAt === 'number' ? properties.ranAt : Date.now();
   const rawStatus = properties?.status;
   const status = rawStatus === 'running' || rawStatus === 'error' ? rawStatus : 'success';
-  if (!projectId || !taskId) {
+  if (!taskId) {
     return;
   }
 
   const nextEvent: ScheduledTaskRanEvent = {
     type: 'scheduled-task-ran',
-    projectId,
     taskId,
     ranAt,
     status,
