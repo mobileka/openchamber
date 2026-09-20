@@ -261,6 +261,22 @@ describe('ui auth client credential seam', () => {
     };
     expect(await auth.ensureSessionToken(dictationWsReq, null)).toBe('client:device-1');
 
+    // An extension surface socket takes the session-wide URL token, never a
+    // guest-scoped one: it carries the user's pointer and keyboard.
+    const surfaceWsReq = {
+      method: 'GET',
+      path: '/api/guests/server-chrome/surface/ws',
+      url: `/api/guests/server-chrome/surface/ws?oc_url_token=${encodeURIComponent(urlToken)}`,
+      headers: { upgrade: 'websocket' },
+    };
+    expect(await auth.ensureSessionToken(surfaceWsReq, null)).toBe('client:device-1');
+    expect(await auth.ensureSessionToken({ ...surfaceWsReq, url: `/api/guests/server-chrome/surface/ws?oc_url_token=${encodeURIComponent(guestToken)}` }, null)).toBe(null);
+    expect(await auth.ensureSessionToken({
+      ...surfaceWsReq,
+      path: '/api/guests/server-chrome/surface/ws/extra',
+      url: `/api/guests/server-chrome/surface/ws/extra?oc_url_token=${encodeURIComponent(urlToken)}`,
+    }, null)).toBe(null);
+
     const devTunnelWsReq = {
       method: 'GET',
       path: '/api/dev-tunnel',
@@ -355,5 +371,61 @@ describe('ui auth client credential seam', () => {
     const expiresAt = Date.parse(createClientInput.expiresAt);
     expect(expiresAt).toBeGreaterThanOrEqual(before + 122_000);
     expect(expiresAt).toBeLessThanOrEqual(Date.now() + 124_000);
+  });
+});
+
+// issue #2377: browsers key cookie jars on host only, so two instances on one
+// LAN IP (different ports) collided on `oc_ui_session`. Cookies are now scoped
+// by the request port so each instance owns its own slot.
+describe('ui auth port-scoped session cookies (issue #2377)', () => {
+  const loginHost = async (auth, host) => {
+    const req = { method: 'POST', headers: { host }, body: { password: 'secret' } };
+    const res = createResponse();
+    await auth.handleSessionCreate(req, res);
+    return String(res.getHeader('set-cookie') || '').split(';', 1)[0];
+  };
+
+  it('names the issued cookie with the request port', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({ password: 'secret' });
+
+    const issued = await loginHost(auth, '192.168.0.1:3000');
+    expect(issued).toMatch(/^oc_ui_session_3000=/);
+    expect(issued.length).toBeGreaterThan('oc_ui_session_3000='.length);
+  });
+
+  it('keeps the bare cookie name when the host has no explicit port', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({ password: 'secret' });
+
+    expect(await loginHost(auth, '192.168.0.1')).toMatch(/^oc_ui_session=/);
+  });
+
+  it('reads the slot for the request port and ignores another port cookie', async () => {
+    const createUiAuth = await loadCreateUiAuth();
+    const auth = createUiAuth({ password: 'secret' });
+
+    // Valid token issued against :3000.
+    const portCookie = await loginHost(auth, '192.168.0.1:3000');
+    const validToken = portCookie.slice('oc_ui_session_3000='.length);
+
+    // A request that lands on :3001 must read the :3001 slot, NOT the :3000 one,
+    // even though the browser ships both cookies to either port.
+    const wrongSlot = {
+      method: 'GET',
+      headers: { host: '192.168.0.1:3001', cookie: `oc_ui_session_3000=${validToken}; oc_ui_session_3001=stale` },
+    };
+    const wrongRes = createResponse();
+    await auth.handleSessionStatus(wrongSlot, wrongRes);
+    expect(wrongRes.body.authenticated).toBe(false);
+
+    // The same token read on its own port authenticates.
+    const rightSlot = {
+      method: 'GET',
+      headers: { host: '192.168.0.1:3000', cookie: `oc_ui_session_3000=${validToken}` },
+    };
+    const rightRes = createResponse();
+    await auth.handleSessionStatus(rightSlot, rightRes);
+    expect(rightRes.body.authenticated).toBe(true);
   });
 });
