@@ -9,6 +9,12 @@ type RootTabsState = {
   selectedPath: string | null;
   expandedPaths: string[];
   touchedAt: number;
+  /**
+   * Outside-root paths explicitly opened as editable (e.g. loop files from the
+   * scheduler). Session-only: sanitize drops it on rehydrate, like the
+   * outside-file grants it pairs with. The server remains the enforcer.
+   */
+  editableOutsidePaths?: string[];
 };
 
 type FilesViewTabsState = {
@@ -22,7 +28,7 @@ type FilesViewTabsActions = {
   removeOpenPath: (root: string, path: string) => void;
   removeOpenPathsByPrefix: (root: string, prefixPath: string) => void;
   removeExpandedPathsByPrefix: (root: string, prefixPath: string) => void;
-  setSelectedPath: (root: string, path: string | null, options?: { allowOutsideRoot?: boolean }) => void;
+  setSelectedPath: (root: string, path: string | null, options?: { allowOutsideRoot?: boolean; editableOutsideRoot?: boolean }) => void;
   ensureSelectedPath: (root: string) => void;
   toggleExpandedPath: (root: string, path: string) => void;
   collapseAllExpandedPaths: (root: string) => void;
@@ -352,8 +358,13 @@ export const useFilesViewTabsStore = create<FilesViewTabsStore>()(
             const openPaths = normalizedPath && !current.openPaths.includes(normalizedPath)
               ? [...current.openPaths, normalizedPath]
               : current.openPaths;
+            const editableOutsidePaths = normalizedPath && options?.editableOutsideRoot && !isPathWithinRoot(normalizedPath, normalizedRoot)
+              ? Array.from(new Set([...(current.editableOutsidePaths ?? []), normalizedPath])).slice(-MAX_OPEN_PATHS_PER_ROOT)
+              : current.editableOutsidePaths;
 
-            if (prev && prev.selectedPath === normalizedPath && openPaths === prev.openPaths) {
+            const editableKey = (editableOutsidePaths ?? []).join('\0');
+            const prevEditableKey = (prev?.editableOutsidePaths ?? []).join('\0');
+            if (prev && prev.selectedPath === normalizedPath && openPaths === prev.openPaths && editableKey === prevEditableKey) {
               return state;
             }
 
@@ -363,6 +374,7 @@ export const useFilesViewTabsStore = create<FilesViewTabsStore>()(
                 ...current,
                 openPaths,
                 selectedPath: normalizedPath,
+                ...(editableOutsidePaths ? { editableOutsidePaths } : {}),
               },
             };
             return { byRoot: clampRoots(byRoot, MAX_ROOTS) };

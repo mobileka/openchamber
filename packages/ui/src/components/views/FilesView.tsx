@@ -959,6 +959,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   }, [openPaths, root, selectedPath, setSelectedPath]);
 
   const selectedFileIsOutsideWorkspace = Boolean(root && selectedFilePath && !isPathWithinRoot(selectedFilePath, root));
+  const editableOutsidePaths = useFilesViewTabsStore((state) => (root ? (state.byRoot[root]?.editableOutsidePaths ?? EMPTY_PATHS) : EMPTY_PATHS));
+  const isSelectedEditableOutside = Boolean(selectedFilePath
+    && selectedFileIsOutsideWorkspace
+    && editableOutsidePaths.some((candidate) => toComparablePath(candidate) === toComparablePath(selectedFilePath)));  const selectedOutsideFileGrant = selectedFileIsOutsideWorkspace ? getOutsideFileGrant(selectedFilePath) : undefined;
   const selectedFileReadOptions = React.useMemo(
     () => ({
       allowOutsideWorkspace: selectedFileIsOutsideWorkspace,
@@ -2627,7 +2631,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const canCopyPath = Boolean(selectedFile && displaySelectedPath.length > 0);
   // Keep image/SVG on the preview path: `isBinaryFile` excludes `.svg`, so binary
   // alone would flip canEdit/isTextFile true and show a dead edit toggle + no-op Save.
-  const canEdit = Boolean(selectedFile && !selectedFileIsOutsideWorkspace && !isSelectedBinary && (!isSelectedImage || isSelectedSvg) && files.writeFile);
+  const canEdit = Boolean(selectedFile && (!selectedFileIsOutsideWorkspace || isSelectedEditableOutside) && !isSelectedBinary && (!isSelectedImage || isSelectedSvg) && files.writeFile);
   const isTextFile = Boolean(selectedFile && !isSelectedBinary && (!isSelectedImage || isSelectedSvg));
   // An active extension's editor claims a text file ahead of the host's own
   // previews.

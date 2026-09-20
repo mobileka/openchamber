@@ -1,3 +1,5 @@
+import express from 'express';
+
 const asNonEmptyString = (value) => {
   if (typeof value !== 'string') {
     return null;
@@ -35,7 +37,7 @@ export const registerScheduledTaskRoutes = (app, dependencies) => {
     }
   });
 
-  app.post('/api/openchamber/scheduled-tasks', async (req, res) => {
+  app.post('/api/openchamber/scheduled-tasks', express.json({ limit: '1mb' }), async (req, res) => {
     const location = asNonEmptyString(req.body?.location);
     const taskInput = req.body && typeof req.body === 'object' ? req.body.task : null;
     if (!location) {
@@ -53,7 +55,7 @@ export const registerScheduledTaskRoutes = (app, dependencies) => {
     }
   });
 
-  app.patch('/api/openchamber/scheduled-tasks/:taskId/enabled', async (req, res) => {
+  app.patch('/api/openchamber/scheduled-tasks/:taskId/enabled', express.json({ limit: '1mb' }), async (req, res) => {
     const taskID = parseTaskID(req);
     if (!taskID) return res.status(400).json({ error: 'taskId is required' });
     try {
