@@ -55,7 +55,7 @@ const MEMORY_PARAMETER_OVERRIDES = {
 
 const ALL_PARAMETER_PROPERTIES = {
   projectId: { type: 'string', description: 'Configured project ID; do not combine with directory' },
-  directory: { type: 'string', description: 'Absolute checkout or session directory; defaults to the current session directory' },
+  directory: { type: 'string', description: 'Absolute checkout or session directory; defaults to the current session directory. For schedule.create it is the scheduled task run directory instead; omit it to run in the workspace root' },
   sessionId: { type: 'string' },
   messageId: { type: 'string', description: 'Optional fork boundary message ID' },
   taskId: { type: 'string' },
@@ -86,6 +86,7 @@ const ALL_PARAMETER_PROPERTIES = {
   cron: { type: 'string', description: 'Cron expression' },
   timezone: { type: 'string', description: 'IANA timezone' },
   disabled: { type: 'boolean', description: 'true disables and false enables; required for schedule.toggle' },
+  location: { type: 'string', enum: ['local', 'shared'], description: 'Loop home for schedule.create: local stays on this machine, shared syncs with the shared config. Omit it and the task lands in local' },
   path: { type: 'string', description: 'File to show for file.open; absolute, or relative to the session directory' },
   url: { type: 'string', description: 'http(s) URL for browser.open' },
   selector: { type: 'string', description: 'CSS selector from a browser.snapshot result' },

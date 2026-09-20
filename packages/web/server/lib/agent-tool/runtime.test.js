@@ -125,6 +125,12 @@ describe('managed agent tool runtime', () => {
       'Wait for current session activity to become idle. Omit by default; use only when the user asks or the next step requires the completed result',
     );
     expect(tool.openchamber.input.properties.parameters.properties.sessionId).toEqual({ type: 'string' });
+    expect(tool.openchamber.input.properties.parameters.properties.location).toEqual({
+      type: 'string',
+      enum: ['local', 'shared'],
+      description: expect.stringContaining('schedule.create'),
+    });
+    expect(tool.openchamber.input.properties.parameters.properties.directory.description).toContain('schedule.create');
     expect(source).not.toContain('title: "OpenChamber"');
     // Nothing resolves from the generated directory, so the file must not import.
     expect(source).not.toMatch(/\bimport\b/);
