@@ -284,12 +284,15 @@ describe('scheduled-task global routes', () => {
 
   const captureHandlers = (scheduledTaskService) => {
     const handlers = new Map();
+    // Routes may carry Express middleware (e.g. express.json()) ahead of the
+    // handler; the last function arg is the handler, mirroring Express.
+    const capture = (key) => (route, ...fns) => handlers.set(`${key} ${route}`, fns[fns.length - 1]);
     const app = {
-      get: vi.fn((route, handler) => handlers.set(`GET ${route}`, handler)),
-      put: vi.fn((route, handler) => handlers.set(`PUT ${route}`, handler)),
-      post: vi.fn((route, handler) => handlers.set(`POST ${route}`, handler)),
-      patch: vi.fn((route, handler) => handlers.set(`PATCH ${route}`, handler)),
-      delete: vi.fn((route, handler) => handlers.set(`DELETE ${route}`, handler)),
+      get: vi.fn(capture('GET')),
+      put: vi.fn(capture('PUT')),
+      post: vi.fn(capture('POST')),
+      patch: vi.fn(capture('PATCH')),
+      delete: vi.fn(capture('DELETE')),
     };
     registerScheduledTaskRoutes(app, {
       scheduledTaskService,

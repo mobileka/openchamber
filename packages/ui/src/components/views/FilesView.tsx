@@ -883,7 +883,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   }, [openPaths, root, selectedPath, setSelectedPath]);
 
   const selectedFileIsOutsideWorkspace = Boolean(root && selectedFilePath && !isPathWithinRoot(selectedFilePath, root));
-  const selectedOutsideFileGrant = selectedFileIsOutsideWorkspace ? getOutsideFileGrant(selectedFilePath) : undefined;
+  const editableOutsidePaths = useFilesViewTabsStore((state) => (root ? (state.byRoot[root]?.editableOutsidePaths ?? EMPTY_PATHS) : EMPTY_PATHS));
+  const isSelectedEditableOutside = Boolean(selectedFilePath
+    && selectedFileIsOutsideWorkspace
+    && editableOutsidePaths.some((candidate) => toComparablePath(candidate) === toComparablePath(selectedFilePath)));  const selectedOutsideFileGrant = selectedFileIsOutsideWorkspace ? getOutsideFileGrant(selectedFilePath) : undefined;
   const selectedFileReadOptions = React.useMemo(
     () => ({
       allowOutsideWorkspace: mode === 'editor-only' && selectedFileIsOutsideWorkspace,
@@ -2454,7 +2457,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const canCopyPath = Boolean(selectedFile && displaySelectedPath.length > 0);
   // Keep image/SVG on the preview path: `isBinaryFile` excludes `.svg`, so binary
   // alone would flip canEdit/isTextFile true and show a dead edit toggle + no-op Save.
-  const canEdit = Boolean(selectedFile && !selectedFileIsOutsideWorkspace && !isSelectedBinary && !isSelectedImage && files.writeFile);
+  const canEdit = Boolean(selectedFile && (!selectedFileIsOutsideWorkspace || isSelectedEditableOutside) && !isSelectedBinary && !isSelectedImage && files.writeFile);
   const isMarkdown = Boolean(selectedFile?.path && isMarkdownFile(selectedFile.path));
   const isJson = Boolean(selectedFile?.path && isJsonFile(selectedFile.path));
   const isHtml = Boolean(selectedFile?.path && isHtmlFile(selectedFile.path));
