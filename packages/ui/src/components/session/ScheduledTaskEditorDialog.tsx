@@ -21,7 +21,7 @@ import { Icon } from "@/components/icon/Icon";
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
-import type { ScheduledTask } from '@/lib/scheduledTasksApi';
+import type { ScheduledTask, LoopLocation } from '@/lib/scheduledTasksApi';
 import { useI18n } from '@/lib/i18n';
 import { isValidCronExpression, getNextRuns, CRON_EXAMPLES } from '@/lib/cron';
 import { canonicalizeTimezone } from '@/lib/timezones';
@@ -474,6 +474,7 @@ type ScheduledTaskDraft = {
     modelID: string;
     variant: string;
     agent: string;
+    directory: string;
     goalEnabled: boolean;
     goalTokenBudget: number | null;
     permissionAutoAccept: boolean;
@@ -512,13 +513,14 @@ const toDraft = (
       name: '',
       enabled: true,
       schedule: {
-        kind: 'daily',
+        // Loop files support cron schedules only; new loops are cron-locked.
+        kind: 'cron',
         times: ['09:00'],
         onceDate: getLocalDateISO(),
         onceTime: '09:00',
         weekdays: [1],
         timezone: timezoneFallback,
-        cronExpression: '',
+        cronExpression: '0 * * * *',
       },
       execution: {
         prompt: '',
@@ -526,6 +528,7 @@ const toDraft = (
         modelID: defaults.modelID,
         variant: defaults.variant,
         agent: defaults.agent,
+        directory: '',
         goalEnabled: false,
         goalTokenBudget: null,
         permissionAutoAccept: false,
@@ -562,6 +565,7 @@ const toDraft = (
       modelID: task.execution.modelID,
       variant: task.execution.variant || '',
       agent: task.execution.agent || '',
+      directory: task.execution.directory || '',
       goalEnabled: task.execution.goalEnabled === true,
       goalTokenBudget: typeof task.execution.goalTokenBudget === 'number' && task.execution.goalTokenBudget > 0
         ? task.execution.goalTokenBudget
@@ -726,10 +730,16 @@ const CronScheduleSection: React.FC<{
 export function ScheduledTaskEditorDialog(props: {
   open: boolean;
   task: ScheduledTask | null;
+  /** Fixed loop location for creation; displayed read-only, never edited here. */
+  location: LoopLocation | null;
   onOpenChange: (open: boolean) => void;
   onSave: (draft: Partial<ScheduledTask>) => Promise<void>;
 }) {
-  const { open, task, onOpenChange, onSave } = props;
+  const { open, task, location, onOpenChange, onSave } = props;
+  // The editor only creates loop files now (existing loops are edited as
+  // files); loop files support cron schedules only, so creation is
+  // cron-locked and file-unsupported toggles are hidden.
+  const isLoopCreate = !task;
   const { t, locale } = useI18n();
   const loadProviders = useConfigStore((state) => state.loadProviders);
   const loadAgents = useConfigStore((state) => state.loadAgents);
@@ -1170,13 +1180,21 @@ export function ScheduledTaskEditorDialog(props: {
         prompt: draft.execution.prompt,
         providerID: draft.execution.providerID,
         modelID: draft.execution.modelID,
-        ...(draft.execution.variant.trim() ? { variant: draft.execution.variant.trim() } : {}),
         ...(draft.execution.agent.trim() ? { agent: draft.execution.agent.trim() } : {}),
-        ...(draft.execution.permissionAutoAccept ? { permissionAutoAccept: true } : {}),
-        ...(draft.execution.goalEnabled ? { goalEnabled: true } : {}),
-        ...(draft.execution.goalEnabled && draft.execution.goalTokenBudget
-          ? { goalTokenBudget: draft.execution.goalTokenBudget }
-          : {}),
+        // Loop files only persist the fields above plus directory; the
+        // file-unsupported toggles (variant, goal, auto-accept) are hidden
+        // while creating and dropped here.
+        ...(isLoopCreate
+          ? (draft.execution.directory.trim() ? { directory: draft.execution.directory.trim() } : {})
+          : {
+              ...(draft.execution.variant.trim() ? { variant: draft.execution.variant.trim() } : {}),
+              ...(draft.execution.directory.trim() ? { directory: draft.execution.directory.trim() } : {}),
+              ...(draft.execution.permissionAutoAccept ? { permissionAutoAccept: true } : {}),
+              ...(draft.execution.goalEnabled ? { goalEnabled: true } : {}),
+              ...(draft.execution.goalEnabled && draft.execution.goalTokenBudget
+                ? { goalTokenBudget: draft.execution.goalTokenBudget }
+                : {}),
+            }),
       },
       ...(draft.state ? { state: draft.state } : {}),
     };
@@ -1190,7 +1208,7 @@ export function ScheduledTaskEditorDialog(props: {
     } finally {
       setSaving(false);
     }
-  }, [draft, onOpenChange, onSave, t]);
+  }, [draft, isLoopCreate, onOpenChange, onSave, t]);
 
   const descriptionId = React.useId();
   const hasOpenFloatingMenu = React.useCallback(() => {
@@ -1207,6 +1225,18 @@ export function ScheduledTaskEditorDialog(props: {
 
   const formBody = (
     <div className="flex flex-col gap-5">
+                {isLoopCreate && location ? (
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 py-0.5 typography-micro font-medium text-muted-foreground">
+                      {location === 'local'
+                        ? t('sessions.scheduledTasks.dialog.badge.local')
+                        : t('sessions.scheduledTasks.dialog.badge.shared')}
+                    </span>
+                    <span className="typography-micro text-muted-foreground">
+                      {t('sessions.scheduledTasks.editor.locationNote')}
+                    </span>
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-1 gap-x-4 gap-y-3 sm:grid-cols-2">
                   <div className="flex flex-col gap-1">
                     <FieldLabel htmlFor="sched-name" required>{t('sessions.scheduledTasks.editor.taskName.label')}</FieldLabel>
@@ -1220,6 +1250,7 @@ export function ScheduledTaskEditorDialog(props: {
                     />
                   </div>
 
+                  {task ? (
                   <div className="flex flex-col gap-1">
                     <FieldLabel>{t('sessions.scheduledTasks.editor.scheduleType.label')}</FieldLabel>
                     <Select
@@ -1256,6 +1287,7 @@ export function ScheduledTaskEditorDialog(props: {
                       </SelectContent>
                     </Select>
                   </div>
+                  ) : null}
 
                 </div>
 
@@ -1516,6 +1548,7 @@ export function ScheduledTaskEditorDialog(props: {
               />
             </div>
 
+            {task ? (
             <div className="flex min-w-0 flex-col gap-1">
               <FieldLabel>{t('sessions.scheduledTasks.editor.thinkingLevel.label')}</FieldLabel>
               <Select
@@ -1546,6 +1579,7 @@ export function ScheduledTaskEditorDialog(props: {
                 </SelectContent>
               </Select>
             </div>
+            ) : null}
           </div>
 
           <div className="flex min-w-0 flex-col gap-1">
@@ -1560,6 +1594,20 @@ export function ScheduledTaskEditorDialog(props: {
                   agent,
                 },
               }))}
+            />
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-1">
+            <FieldLabel htmlFor="sched-directory">{t('sessions.scheduledTasks.editor.directory.label')}</FieldLabel>
+            <Input
+              id="sched-directory"
+              value={draft.execution.directory}
+              onChange={(event) => setDraft((prev) => ({
+                ...prev,
+                execution: { ...prev.execution, directory: event.target.value },
+              }))}
+              placeholder={t('sessions.scheduledTasks.editor.directory.placeholder')}
+              className="w-full"
             />
           </div>
 
@@ -1679,6 +1727,8 @@ export function ScheduledTaskEditorDialog(props: {
       </label>
 
       <div className="flex items-center gap-2">
+        {task ? (
+        <>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -1721,6 +1771,8 @@ export function ScheduledTaskEditorDialog(props: {
           </TooltipTrigger>
           <TooltipContent side="top" sideOffset={6}>{t('sessions.scheduledTasks.editor.goal.label')}</TooltipContent>
         </Tooltip>
+        </>
+        ) : null}
         <Button type="button" variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
           {t('sessions.scheduledTasks.editor.actions.cancel')}
         </Button>

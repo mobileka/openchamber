@@ -72,64 +72,47 @@ const parseModel = (value) => {
   return { providerID: model.slice(0, slashIndex), modelID: model.slice(slashIndex + 1) };
 };
 
-const parseWeekdays = (value) => {
-  const raw = asNonEmptyString(value);
-  if (!raw) throw new OpenChamberControlError('weekly is required', 400);
-  const weekdays = raw.split(',').map((entry) => Number.parseInt(entry.trim(), 10));
-  if (weekdays.some((entry) => !Number.isInteger(entry) || entry < 0 || entry > 6)) {
-    throw new OpenChamberControlError('weekly must contain weekdays from 0 to 6', 400);
-  }
-  return Array.from(new Set(weekdays)).sort((a, b) => a - b);
-};
-
-const buildSchedule = (input) => {
-  const daily = asNonEmptyString(input.daily);
-  const weekly = asNonEmptyString(input.weekly);
-  const once = asNonEmptyString(input.once);
+const buildLoopSchedule = (input) => {
   const cron = asNonEmptyString(input.cron);
-  const selectors = [daily, weekly, once, cron].filter(Boolean);
-  if (selectors.length !== 1) {
-    throw new OpenChamberControlError('Provide exactly one of daily, weekly, once, or cron', 400);
+  if (!cron) {
+    const other = ['daily', 'weekly', 'once', 'time'].filter((key) => asNonEmptyString(input[key]));
+    if (other.length > 0) {
+      throw new OpenChamberControlError('Loop files support cron schedules only; provide cron', 400);
+    }
+    throw new OpenChamberControlError('cron is required', 400);
   }
   const timezone = asNonEmptyString(input.timezone);
-  if (daily) return { kind: 'daily', times: [daily], ...(timezone ? { timezone } : {}) };
-  if (weekly) {
-    const time = asNonEmptyString(input.time);
-    if (!time) throw new OpenChamberControlError('time is required with weekly', 400);
-    return { kind: 'weekly', weekdays: parseWeekdays(weekly), times: [time], ...(timezone ? { timezone } : {}) };
-  }
-  if (once) {
-    const time = asNonEmptyString(input.time);
-    if (!time) throw new OpenChamberControlError('time is required with once', 400);
-    return { kind: 'once', date: once, time, ...(timezone ? { timezone } : {}) };
-  }
   return { kind: 'cron', cron, ...(timezone ? { timezone } : {}) };
 };
 
-const buildScheduledTask = (input) => {
+const buildLoopTask = (input) => {
+  const location = asNonEmptyString(input.location);
+  if (location !== 'local' && location !== 'shared') {
+    throw new OpenChamberControlError('location must be local or shared', 400);
+  }
   const name = asNonEmptyString(input.name);
   const prompt = asNonEmptyString(input.prompt);
   if (!name) throw new OpenChamberControlError('name is required', 400);
   if (!prompt) throw new OpenChamberControlError('prompt is required', 400);
   const model = parseModel(input.model);
-  const goalTokenBudget = input.goalTokenBudget;
-  if (goalTokenBudget !== undefined && input.goal !== true) {
-    throw new OpenChamberControlError('goalTokenBudget requires goal', 400);
+  if (input.goal === true || input.goalTokenBudget !== undefined) {
+    throw new OpenChamberControlError('Loop files do not support goals', 400);
   }
-  if (goalTokenBudget !== undefined && (!Number.isSafeInteger(goalTokenBudget) || goalTokenBudget < 1000 || goalTokenBudget > 100_000_000)) {
-    throw new OpenChamberControlError('goalTokenBudget must be from 1000 to 100000000', 400);
+  if (asNonEmptyString(input.variant)) {
+    throw new OpenChamberControlError('Loop files do not support model variants', 400);
   }
   return {
-    name,
-    enabled: input.disabled !== true,
-    schedule: buildSchedule(input),
-    execution: {
-      prompt,
-      ...model,
-      ...(asNonEmptyString(input.agent) ? { agent: input.agent.trim() } : {}),
-      ...(asNonEmptyString(input.variant) ? { variant: input.variant.trim() } : {}),
-      ...(input.goal === true ? { goalEnabled: true } : {}),
-      ...(goalTokenBudget !== undefined ? { goalTokenBudget } : {}),
+    location,
+    task: {
+      name,
+      enabled: input.disabled !== true,
+      schedule: buildLoopSchedule(input),
+      execution: {
+        prompt,
+        ...model,
+        ...(asNonEmptyString(input.agent) ? { agent: input.agent.trim() } : {}),
+        ...(asNonEmptyString(input.directory) ? { directory: input.directory.trim() } : {}),
+      },
     },
   };
 };
@@ -479,32 +462,23 @@ export const createOpenChamberControlService = (dependencies) => {
         if (SCHEDULE_TASK_ID_ACTIONS.has(action) && !taskID) {
           throw new OpenChamberControlError('taskId is required', 400);
         }
-        const explicitProjectID = asNonEmptyString(input.projectId);
-        const explicitDirectory = asNonEmptyString(input.directory);
-        const contextDirectoryFallback = explicitProjectID
-          ? undefined
-          : asNonEmptyString(contextDirectory) || undefined;
-        const projectID = await scheduledTaskService.resolveProjectID({
-          projectId: explicitProjectID || undefined,
-          directory: explicitDirectory || contextDirectoryFallback,
-        });
         switch (action) {
           case 'schedule.list':
-            return { scheduler: await scheduledTaskService.status(), tasks: await scheduledTaskService.list(projectID) };
+            return { scheduler: await scheduledTaskService.status(), tasks: await scheduledTaskService.list() };
           case 'schedule.create': {
-            const result = await scheduledTaskService.upsert(projectID, buildScheduledTask(input));
+            const result = await scheduledTaskService.create(buildLoopTask(input));
             return { task: result.task, created: result.created };
           }
           case 'schedule.run':
-            return scheduledTaskService.run(projectID, taskID);
+            return scheduledTaskService.run(taskID);
           case 'schedule.delete':
-            return { deleted: true, tasks: await scheduledTaskService.remove(projectID, taskID) };
+            return { deleted: true, tasks: await scheduledTaskService.removeLoopFile(taskID) };
           case 'schedule.toggle': {
             if (typeof input.disabled !== 'boolean') {
               throw new OpenChamberControlError('disabled is required for schedule.toggle', 400);
             }
             const enabled = input.disabled === false;
-            return { task: await scheduledTaskService.setEnabled(projectID, taskID, enabled), enabled };
+            return { task: await scheduledTaskService.setLoopEnabled(taskID, enabled), enabled };
           }
         }
       }

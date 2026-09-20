@@ -249,27 +249,27 @@ describe('cli args', () => {
     const parsed = parseArgs([
       'schedule',
       'create',
-      '--project',
-      'proj_1',
+      '--location',
+      'shared',
       '--name',
       'Daily review',
       '--prompt',
       'Review the repo',
       '--model',
       'openai/gpt-5.5',
-      '--daily',
-      '09:30',
+      '--cron',
+      '0 9 * * *',
       '--timezone',
       'Europe/Kyiv',
     ]);
 
     expect(parsed.command).toBe('schedule');
     expect(parsed.scheduleAction).toBe('create');
-    expect(parsed.options.project).toBe('proj_1');
+    expect(parsed.options.location).toBe('shared');
     expect(parsed.options.name).toBe('Daily review');
     expect(parsed.options.prompt).toBe('Review the repo');
     expect(parsed.options.model).toBe('openai/gpt-5.5');
-    expect(parsed.options.daily).toBe('09:30');
+    expect(parsed.options.cron).toBe('0 9 * * *');
     expect(parsed.options.timezone).toBe('Europe/Kyiv');
   });
 

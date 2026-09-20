@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
@@ -10,6 +10,22 @@ import {
   createScheduledTasksRuntime,
 } from './runtime.js';
 import { createProjectConfigRuntime } from '../projects/project-config.js';
+
+const sdk = vi.hoisted(() => ({
+  sessionCreates: [],
+}));
+
+vi.mock('@opencode-ai/sdk/v2', () => ({
+  createOpencodeClient: () => ({
+    session: {
+      create: async (args) => {
+        sdk.sessionCreates.push(args);
+        return { data: { id: `ses-${sdk.sessionCreates.length}` } };
+      },
+    },
+    command: { list: async () => ({ data: [] }) },
+  }),
+}));
 
 describe('scheduled-tasks runtime helpers', () => {
   it('computes next daily run in timezone', () => {
@@ -120,26 +136,14 @@ describe('scheduled-tasks runtime helpers', () => {
   });
 });
 
-describe('scheduled-tasks runtime syncProject wiring', () => {
-  const createTempProject = async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-runtime-loop-'));
-    const repoPath = path.join(tempRoot, 'repo');
-    await mkdir(path.join(repoPath, '.agents', 'loops'), { recursive: true });
-    return {
-      tempRoot,
-      repoPath,
-      cleanup: async () => {
-        await rm(tempRoot, { recursive: true, force: true });
-      },
-    };
-  };
-
-  const createProjectConfig = async (tempRoot) => createProjectConfigRuntime({
-    fsPromises: await import('fs/promises'),
-    path,
-    projectsDirPath: path.join(tempRoot, 'config'),
-    createTaskID: () => 'task-fixed-id',
-  });
+describe('scheduled-tasks runtime syncLoops wiring', () => {
+  let tempRoot;
+  let home;
+  let configDir;
+  let originalEnv;
+  let originalHomedir;
+  let originalFetch;
+  let runtimes;
 
   const createRuntimeDeps = (overrides = {}) => ({
     buildOpenCodeUrl: () => 'http://localhost',
@@ -148,114 +152,140 @@ describe('scheduled-tasks runtime syncProject wiring', () => {
     ...overrides,
   });
 
-  it('reconciles discovered loops when the project path is known', async () => {
-    const { tempRoot, repoPath, cleanup } = await createTempProject();
-    try {
-      await writeFile(path.join(repoPath, '.agents', 'loops', 'daily.md'), `---
-name: daily
-schedule: "0 9 * * *"
-enabled: true
-model: openai/gpt-5
----
-Run daily.
-`, 'utf8');
-
-      const projectConfigRuntime = await createProjectConfig(tempRoot);
-      const runtime = createScheduledTasksRuntime({
-        ...createRuntimeDeps(),
-        projectConfigRuntime,
-        listProjects: async () => [{ id: 'proj', path: repoPath }],
-      });
-
-      await runtime.syncProject('proj');
-
-      const tasks = await projectConfigRuntime.listScheduledTasks('proj');
-      expect(tasks).toHaveLength(1);
-      expect(tasks[0].id).toBe('loop:project:daily');
-      expect(tasks[0].loopFile).toBe(path.join(repoPath, '.agents', 'loops', 'daily.md'));
-      // syncTaskSchedule computed and persisted the next run for the enabled task.
-      expect(tasks[0].state.nextRunAt).toBeGreaterThan(0);
-    } finally {
-      await cleanup();
-    }
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-runtime-loop-'));
+    home = path.join(tempRoot, 'home');
+    configDir = path.join(tempRoot, 'opencode-config');
+    originalEnv = process.env.OPENCODE_CONFIG_DIR;
+    process.env.OPENCODE_CONFIG_DIR = configDir;
+    originalHomedir = os.homedir;
+    vi.spyOn(os, 'homedir').mockReturnValue(home);
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async () => ({ ok: true, text: async () => '' }));
+    sdk.sessionCreates.length = 0;
+    runtimes = [];
   });
 
-  it('falls back to plain listing when the project path cannot be resolved', async () => {
-    const { tempRoot, cleanup } = await createTempProject();
-    try {
-      const projectConfigRuntime = await createProjectConfig(tempRoot);
-      const reconcileSpy = vi.spyOn(projectConfigRuntime, 'reconcileLoopTasks');
-      const listSpy = vi.spyOn(projectConfigRuntime, 'listScheduledTasks');
-
-      const runtime = createScheduledTasksRuntime({
-        ...createRuntimeDeps(),
-        projectConfigRuntime,
-        // Project not registered -> ensureProjectPath cannot resolve a path.
-        listProjects: async () => [],
-      });
-
-      await runtime.syncProject('proj');
-
-      expect(reconcileSpy).not.toHaveBeenCalled();
-      expect(listSpy).toHaveBeenCalledWith('proj');
-      expect(await projectConfigRuntime.listScheduledTasks('proj')).toEqual([]);
-      reconcileSpy.mockRestore();
-      listSpy.mockRestore();
-    } finally {
-      await cleanup();
-    }
-  });
-});
-
-describe('scheduled-tasks runtime syncAllProjects', () => {
-  it('keeps scheduling the other projects when one project cannot be synced', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-runtime-sync-all-'));
-    try {
-      const brokenPath = path.join(tempRoot, 'broken');
-      const healthyPath = path.join(tempRoot, 'healthy');
-      await mkdir(path.join(healthyPath, '.agents', 'loops'), { recursive: true });
-      await mkdir(brokenPath, { recursive: true });
-      await writeFile(path.join(healthyPath, '.agents', 'loops', 'daily.md'), `---
-name: daily
-schedule: "0 9 * * *"
-enabled: true
-model: openai/gpt-5
----
-Run daily.
-`, 'utf8');
-
-      const projectConfigRuntime = createProjectConfigRuntime({
-        fsPromises: await import('fs/promises'),
-        path,
-        projectsDirPath: path.join(tempRoot, 'config'),
-        createTaskID: () => 'task-fixed-id',
-      });
-      await mkdir(path.join(tempRoot, 'config'), { recursive: true });
-      await writeFile(projectConfigRuntime.resolveProjectConfigPath('broken'), '{ not json', 'utf8');
-
-      const warnings = [];
-      const runtime = createScheduledTasksRuntime({
-        buildOpenCodeUrl: () => 'http://localhost',
-        getOpenCodeAuthHeaders: () => ({}),
-        waitForOpenCodeReady: async () => {},
-        projectConfigRuntime,
-        listProjects: async () => [
-          { id: 'broken', path: brokenPath },
-          { id: 'healthy', path: healthyPath },
-        ],
-        logger: { warn: (...args) => warnings.push(args) },
-      });
-
-      await expect(runtime.start()).resolves.toBeUndefined();
-
-      expect(runtime.getStatus().enabledScheduledTasksCount).toBe(1);
-      const healthyTasks = await projectConfigRuntime.listScheduledTasks('healthy');
-      expect(healthyTasks.map((task) => task.id)).toEqual(['loop:project:daily']);
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0][1]).toMatchObject({ projectID: 'broken' });
+  afterEach(async () => {
+    for (const runtime of runtimes) {
       runtime.stop();
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
     }
+    if (originalEnv === undefined) {
+      delete process.env.OPENCODE_CONFIG_DIR;
+    } else {
+      process.env.OPENCODE_CONFIG_DIR = originalEnv;
+    }
+    os.homedir = originalHomedir;
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const createProjectConfig = async () => createProjectConfigRuntime({
+    fsPromises: await import('fs/promises'),
+    path,
+    projectsDirPath: path.join(tempRoot, 'state'),
+    createTaskID: () => 'task-fixed-id',
+  });
+
+  const track = (runtime) => {
+    runtimes.push(runtime);
+    return runtime;
+  };
+
+  it('reconciles discovered loops into the single global document', async () => {
+    const sharedDir = path.join(configDir, '.agents', 'loops');
+    await mkdir(sharedDir, { recursive: true });
+    await writeFile(path.join(sharedDir, 'daily.md'), `---
+schedule: "0 9 * * *"
+enabled: true
+model: openai/gpt-5
+---
+Run daily.
+`, 'utf8');
+
+    const projectConfigRuntime = await createProjectConfig();
+    const runtime = track(createScheduledTasksRuntime({
+      ...createRuntimeDeps(),
+      projectConfigRuntime,
+      defaultRunDirectory: path.join(tempRoot, 'work'),
+    }));
+
+    const tasks = await runtime.syncLoops();
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].id).toBe('loop:daily');
+    expect(tasks[0].loopFile).toBe(path.join(sharedDir, 'daily.md'));
+    // syncTaskSchedule computed and persisted the next run for the enabled task.
+    const stored = await projectConfigRuntime.listScheduledTasks('scheduled-tasks');
+    expect(stored[0].state.nextRunAt).toBeGreaterThan(0);
+    // The global document lives at the state dir root, not per-project.
+    expect(projectConfigRuntime.resolveProjectConfigPath('scheduled-tasks'))
+      .toBe(path.join(tempRoot, 'state', 'scheduled-tasks.json'));
+  });
+
+  it('unschedules tasks whose loop file was removed', async () => {
+    const sharedDir = path.join(configDir, '.agents', 'loops');
+    await mkdir(sharedDir, { recursive: true });
+    const loopFile = path.join(sharedDir, 'daily.md');
+    await writeFile(loopFile, `---
+schedule: "0 9 * * *"
+enabled: true
+model: openai/gpt-5
+---
+Run daily.
+`, 'utf8');
+
+    const projectConfigRuntime = await createProjectConfig();
+    const runtime = track(createScheduledTasksRuntime({
+      ...createRuntimeDeps(),
+      projectConfigRuntime,
+      defaultRunDirectory: path.join(tempRoot, 'work'),
+    }));
+
+    expect(await runtime.syncLoops()).toHaveLength(1);
+    await rm(loopFile, { force: true });
+    expect(await runtime.syncLoops()).toHaveLength(0);
+  });
+
+  it('runs tasks in their loop directory, defaulting to the run directory', async () => {
+    const sharedDir = path.join(configDir, '.agents', 'loops');
+    await mkdir(sharedDir, { recursive: true });
+    const customDir = path.join(tempRoot, 'custom');
+    await writeFile(path.join(sharedDir, 'custom-dir.md'), `---
+schedule: "0 9 * * *"
+enabled: false
+model: openai/gpt-5
+directory: "${customDir}"
+---
+Run elsewhere.
+`, 'utf8');
+    await writeFile(path.join(sharedDir, 'default-dir.md'), `---
+schedule: "0 9 * * *"
+enabled: false
+model: openai/gpt-5
+---
+Run at default.
+`, 'utf8');
+
+    const projectConfigRuntime = await createProjectConfig();
+    const defaultRunDirectory = path.join(tempRoot, 'work');
+    const runtime = track(createScheduledTasksRuntime({
+      ...createRuntimeDeps(),
+      projectConfigRuntime,
+      defaultRunDirectory,
+    }));
+
+    await runtime.syncLoops();
+
+    // Manual runs execute paused tasks too.
+    const custom = await runtime.runNow('loop:custom-dir');
+    expect(custom.ok).toBe(true);
+    const fallback = await runtime.runNow('loop:default-dir');
+    expect(fallback.ok).toBe(true);
+
+    expect(sdk.sessionCreates).toHaveLength(2);
+    expect(sdk.sessionCreates[0].directory).toBe(customDir);
+    expect(sdk.sessionCreates[1].directory).toBe(defaultRunDirectory);
   });
 });

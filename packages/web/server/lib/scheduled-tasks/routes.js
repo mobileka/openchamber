@@ -6,126 +6,84 @@ const asNonEmptyString = (value) => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
-const parseProjectID = (req) => asNonEmptyString(req?.params?.projectId);
 const parseTaskID = (req) => asNonEmptyString(req?.params?.taskId);
+
+const sendServiceError = (res, error, fallback) => {
+  if (error?.statusCode) {
+    return res.status(error.statusCode).json({
+      error: error.message,
+      ...(error.task ? { task: error.task } : {}),
+    });
+  }
+  console.error(fallback, error);
+  return res.status(500).json({ error: `${fallback}.` });
+};
 
 export const registerScheduledTaskRoutes = (app, dependencies) => {
   const {
-    readSettingsFromDiskMigrated,
-    sanitizeProjects,
-    projectConfigRuntime,
-    scheduledTasksRuntime,
     getOpenChamberEventClients,
     writeSseEvent,
-    scheduledTaskService = createScheduledTaskService(dependencies),
+    scheduledTaskService,
   } = dependencies;
 
-  app.get('/api/projects/:projectId/scheduled-tasks', async (req, res) => {
-    const projectID = parseProjectID(req);
-    if (!projectID) {
-      return res.status(400).json({ error: 'projectId is required' });
-    }
-
+  app.get('/api/openchamber/scheduled-tasks', async (_req, res) => {
     try {
-      const tasks = await scheduledTaskService.list(projectID);
+      const tasks = await scheduledTaskService.list();
       return res.json({ tasks });
     } catch (error) {
-      if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
-      console.error('[ScheduledTasks] failed to load tasks:', error);
-      return res.status(500).json({ error: 'Failed to load scheduled tasks' });
+      return sendServiceError(res, error, '[ScheduledTasks] failed to load tasks:');
     }
   });
 
-  app.put('/api/projects/:projectId/scheduled-tasks', async (req, res) => {
-    const projectID = parseProjectID(req);
-    if (!projectID) {
-      return res.status(400).json({ error: 'projectId is required' });
-    }
-
+  app.post('/api/openchamber/scheduled-tasks', async (req, res) => {
+    const location = asNonEmptyString(req.body?.location);
     const taskInput = req.body && typeof req.body === 'object' ? req.body.task : null;
+    if (!location) {
+      return res.status(400).json({ error: 'location must be local or shared' });
+    }
     if (!taskInput || typeof taskInput !== 'object') {
       return res.status(400).json({ error: 'task payload is required' });
     }
 
     try {
-      return res.json(await scheduledTaskService.upsert(projectID, taskInput));
+      const result = await scheduledTaskService.create({ location, task: taskInput });
+      return res.status(201).json(result);
     } catch (error) {
-      if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
-      const message = error instanceof Error ? error.message : 'Failed to save scheduled task';
-      const statusCode = message.toLowerCase().includes('required') || message.toLowerCase().includes('invalid')
-        ? 400
-        : 500;
-      if (statusCode === 500) {
-        console.error('[ScheduledTasks] failed to save task:', error);
-      }
-      return res.status(statusCode).json({ error: message });
+      return sendServiceError(res, error, '[ScheduledTasks] failed to create task:');
     }
   });
 
-  app.delete('/api/projects/:projectId/scheduled-tasks/:taskId', async (req, res) => {
-    const projectID = parseProjectID(req);
+  app.patch('/api/openchamber/scheduled-tasks/:taskId/enabled', async (req, res) => {
     const taskID = parseTaskID(req);
-    if (!projectID) {
-      return res.status(400).json({ error: 'projectId is required' });
-    }
-    if (!taskID) {
-      return res.status(400).json({ error: 'taskId is required' });
-    }
-
-    try {
-      return res.json({ tasks: await scheduledTaskService.remove(projectID, taskID) });
-    } catch (error) {
-      if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
-      console.error('[ScheduledTasks] failed to delete task:', error);
-      return res.status(500).json({ error: 'Failed to delete scheduled task' });
-    }
-  });
-
-  app.patch('/api/projects/:projectId/scheduled-tasks/:taskId/loop-file', async (req, res) => {
-    const projectID = parseProjectID(req);
-    const taskID = parseTaskID(req);
-    if (!projectID) return res.status(400).json({ error: 'projectId is required' });
     if (!taskID) return res.status(400).json({ error: 'taskId is required' });
     try {
-      const task = await scheduledTaskService.setLoopEnabled(projectID, taskID, req.body?.enabled);
+      const task = await scheduledTaskService.setLoopEnabled(taskID, req.body?.enabled);
       return res.json({ task });
     } catch (error) {
-      if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
-      console.error('[ScheduledTasks] failed to update loop file:', error);
-      return res.status(500).json({ error: 'Failed to update loop file' });
+      return sendServiceError(res, error, '[ScheduledTasks] failed to update loop file:');
     }
   });
 
-  app.delete('/api/projects/:projectId/scheduled-tasks/:taskId/loop-file', async (req, res) => {
-    const projectID = parseProjectID(req);
+  app.delete('/api/openchamber/scheduled-tasks/:taskId', async (req, res) => {
     const taskID = parseTaskID(req);
-    if (!projectID) return res.status(400).json({ error: 'projectId is required' });
     if (!taskID) return res.status(400).json({ error: 'taskId is required' });
     try {
-      return res.json({ tasks: await scheduledTaskService.removeLoopFile(projectID, taskID) });
+      return res.json({ tasks: await scheduledTaskService.removeLoopFile(taskID) });
     } catch (error) {
-      if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message });
-      console.error('[ScheduledTasks] failed to delete loop file:', error);
-      return res.status(500).json({ error: 'Failed to delete loop file' });
+      return sendServiceError(res, error, '[ScheduledTasks] failed to delete loop file:');
     }
   });
 
-  app.post('/api/projects/:projectId/scheduled-tasks/:taskId/run', async (req, res) => {
-    const projectID = parseProjectID(req);
+  app.post('/api/openchamber/scheduled-tasks/:taskId/run', async (req, res) => {
     const taskID = parseTaskID(req);
-    if (!projectID) {
-      return res.status(400).json({ error: 'projectId is required' });
-    }
     if (!taskID) {
       return res.status(400).json({ error: 'taskId is required' });
     }
 
     try {
-      return res.json({ ok: true, ...await scheduledTaskService.run(projectID, taskID) });
+      return res.json({ ok: true, ...await scheduledTaskService.run(taskID) });
     } catch (error) {
-      if (error?.statusCode) return res.status(error.statusCode).json({ error: error.message, ...(error.task ? { task: error.task } : {}) });
-      console.error('[ScheduledTasks] failed to run task:', error);
-      return res.status(500).json({ error: 'Failed to run scheduled task' });
+      return sendServiceError(res, error, '[ScheduledTasks] failed to run task:');
     }
   });
 
@@ -184,4 +142,3 @@ export const registerScheduledTaskRoutes = (app, dependencies) => {
     });
   });
 };
-import { createScheduledTaskService } from './service.js';

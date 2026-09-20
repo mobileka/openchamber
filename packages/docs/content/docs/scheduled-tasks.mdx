@@ -5,65 +5,57 @@ description: Run a prompt automatically on a schedule.
 
 # Scheduled Tasks
 
-A scheduled task runs a prompt for you on a schedule — for example, a daily "summarize yesterday's changes" or a weekly cleanup. When it runs, OpenChamber starts a new session and sends the prompt on its own. Open the scheduler from the button at the top of the session sidebar.
+A scheduled task runs a prompt for you on a schedule — for example, a check every 30 minutes or a daily digest. When it runs, OpenChamber starts a new session and sends the prompt on its own. Open the scheduler from the button at the top of the session sidebar.
+
+Every task is a **loop**: a portable markdown file you can commit. There are no project-scoped tasks — loops live in two fixed places:
+
+- **Shared** — `$OPENCODE_CONFIG_DIR/.agents/loops/*.md`, synced via git. Shared loops run on every machine.
+- **Local** — `~/.agents/loops/*.md`, this machine only.
+
+If a local and a shared loop share a file name, the local one wins.
 
 ## Create a task
 
 1. Open the scheduled tasks dialog from the session sidebar.
-2. Add a task and give it a name.
-3. Choose when it runs:
-   - **daily** — at one or more times each day
-   - **weekly** — on chosen weekdays and times
-   - **once** — a single date and time
-   - **cron** — an arbitrary cron expression
-4. Set what it does: the prompt to send, and the provider, model, and agent to use. The prompt can be a slash command, like `/review`.
-5. Save, and make sure the task is enabled.
+2. Press **New task** and pick **Local** or **Shared**. The location is fixed afterwards — it decides which directory the file is written to.
+3. Give it a name (becomes the `<name>.md` file), a cron expression for when it runs, the provider, model, and agent to use, and optionally a working directory (defaults to the synced repo root). The prompt can be a slash command, like `/review`.
+4. Save, and make sure the task is enabled.
 
 You can run any task immediately with **run now** to check it does what you expect.
 
-Check **Run as goal** to make the run pursue its prompt to completion instead of stopping after one reply — see [Session Goals](/session-goals/).
+## Loop file format
 
-## Loops: scheduled tasks as markdown files
-
-A **loop** is a scheduled task defined as a portable markdown file you can commit to your repo. Drop a file into `.agents/loops/` and open the Scheduled Tasks list to sync it — no server restart needed:
+The task name is the file name without `.md`:
 
 ```markdown
 ---
-name: daily-digest
 schedule: "0 9 * * *"
 enabled: true
 model: anthropic/claude-sonnet-4-5
 agent: plan
 timezone: Europe/Kyiv
+directory: ~/dev/opencode
 ---
 Summarize repository changes since yesterday and post the digest.
 ```
-
-### Where files live
-
-- **Project scope** — `.agents/loops/*.md` in the project directory or any ancestor directory up to the git worktree root.
-- **User scope** — `~/.agents/loops/*.md` applies to every project you open.
-
-If a project loop and a user loop share a name, the project loop wins.
 
 ### Fields
 
 | Field | Meaning |
 |---|---|
-| `name` | Task name (required, max 80 characters). |
 | `schedule` | Cron expression (required) — loop files are cron-only. |
 | `enabled` | Set `true` to run. Loops are **off by default**, so committing a file never starts running a task on its own. |
 | `model` | `provider/model` (required), e.g. `anthropic/claude-sonnet-4-5`. |
 | `agent` | Agent to use (optional). |
 | `timezone` | IANA timezone (optional, defaults to the server zone). |
+| `directory` | Working directory for runs (optional, `~` allowed, defaults to the synced repo root). |
 | body | The execution prompt (required). Can be a slash command, like `/review src/`. |
 
 ### How loops behave
 
 - The **file is authoritative** while it exists. **Edit** opens it in the built-in file editor, the enabled toggle updates its frontmatter, and deleting the task deletes the markdown file after confirmation. **Run now** remains available.
-- Runtime state (last run, next run, status) lives in the project config and is never written back into the markdown file.
-- Renaming the `name` field renames the task in place. If a loop file temporarily fails to parse (mid-edit, merge conflict), its task is kept with the last good definition until the file is fixed.
-- `daily`/`weekly`/`once` schedules and goal settings remain UI-only; loop files are always cron.
+- Runtime state (last run, next run, status) lives in the machine-local `$OPENCHAMBER_DATA_DIR/scheduled-tasks.json` and is never written back into the markdown file — or synced.
+- Renaming the file renames the task (run history starts fresh). Editing anything else keeps the task and its state in place. If a loop file temporarily fails to parse (mid-edit, merge conflict), its task is kept with the last good definition until the file is fixed.
 
 ## What success looks like
 

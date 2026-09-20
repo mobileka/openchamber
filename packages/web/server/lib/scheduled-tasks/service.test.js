@@ -1,77 +1,122 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import os from 'os';
 import path from 'path';
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
 import { createScheduledTaskService } from './service.js';
 import { registerScheduledTaskRoutes } from './routes.js';
 
-const createService = (overrides = {}) => {
-  const projectConfigRuntime = {
-    listScheduledTasks: vi.fn(async () => []),
-    deleteScheduledTask: vi.fn(async () => ({ deleted: true, tasks: [] })),
-    ...(overrides.projectConfigRuntime || {}),
+let originalEnv;
+let originalHomedir;
+
+beforeEach(() => {
+  originalEnv = process.env.OPENCODE_CONFIG_DIR;
+  originalHomedir = os.homedir;
+});
+
+afterEach(() => {
+  if (originalEnv === undefined) {
+    delete process.env.OPENCODE_CONFIG_DIR;
+  } else {
+    process.env.OPENCODE_CONFIG_DIR = originalEnv;
+  }
+  os.homedir = originalHomedir;
+  vi.restoreAllMocks();
+});
+
+const createDirs = async () => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-svc-'));
+  const home = path.join(tempRoot, 'home');
+  const configDir = path.join(tempRoot, 'opencode-config');
+  vi.spyOn(os, 'homedir').mockReturnValue(home);
+  process.env.OPENCODE_CONFIG_DIR = configDir;
+  return {
+    tempRoot,
+    sharedDir: path.join(configDir, '.agents', 'loops'),
+    localDir: path.join(home, '.agents', 'loops'),
+    cleanup: async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    },
   };
+};
+
+const createService = (overrides = {}) => {
   const scheduledTasksRuntime = {
-    syncProject: vi.fn(async () => []),
+    syncLoops: vi.fn(async () => []),
+    runNow: vi.fn(),
+    getStatus: vi.fn(async () => ({})),
     ...(overrides.scheduledTasksRuntime || {}),
   };
   const service = createScheduledTaskService({
-    readSettingsFromDiskMigrated: async () => ({
-      projects: [{ id: 'project-test', path: '/repo' }],
-    }),
-    sanitizeProjects: (projects) => projects,
-    projectConfigRuntime,
     scheduledTasksRuntime,
+    validateDirectoryPath: async (directory) => ({ ok: true, directory }),
+    ...(overrides.service || {}),
   });
-  return { service, projectConfigRuntime, scheduledTasksRuntime };
+  return { service, scheduledTasksRuntime };
 };
 
 const loopTask = {
-  id: 'loop:project:daily-digest',
+  id: 'loop:daily-digest',
   name: 'daily-digest',
   enabled: true,
-  loopFile: '/repo/.agents/loops/daily-digest.md',
+  loopFile: null,
   schedule: { kind: 'cron', cron: '0 9 * * *', timezone: 'UTC' },
   execution: { prompt: 'digest', providerID: 'openai', modelID: 'gpt-4.1' },
 };
 
-describe('scheduled-task service list', () => {
-  it('reconciles loop files before returning tasks', async () => {
-    const syncedTasks = [loopTask];
-    const { service, projectConfigRuntime, scheduledTasksRuntime } = createService({
-      scheduledTasksRuntime: {
-        syncProject: vi.fn(async () => syncedTasks),
-      },
-    });
+const writeSharedLoop = async (sharedDir, fileName, content) => {
+  await mkdir(sharedDir, { recursive: true });
+  const filePath = path.join(sharedDir, fileName);
+  await writeFile(filePath, content, 'utf8');
+  return filePath;
+};
 
-    await expect(service.list('project-test')).resolves.toBe(syncedTasks);
-    expect(scheduledTasksRuntime.syncProject).toHaveBeenCalledOnce();
-    expect(scheduledTasksRuntime.syncProject).toHaveBeenCalledWith('project-test');
-    expect(projectConfigRuntime.listScheduledTasks).not.toHaveBeenCalled();
+describe('scheduled-task service list', () => {
+  it('syncs loops and attaches each file location', async () => {
+    const ctx = await createDirs();
+    try {
+      const loopFilePath = await writeSharedLoop(ctx.sharedDir, 'daily-digest.md', `---
+schedule: "0 9 * * *"
+enabled: true
+model: openai/gpt-5
+---
+
+Digest.
+`);
+      const { service, scheduledTasksRuntime } = createService({
+        scheduledTasksRuntime: {
+          syncLoops: vi.fn(async () => [{ ...loopTask, loopFile: loopFilePath }]),
+        },
+      });
+
+      const tasks = await service.list();
+
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].location).toBe('shared');
+      expect(scheduledTasksRuntime.syncLoops).toHaveBeenCalledOnce();
+    } finally {
+      await ctx.cleanup();
+    }
   });
 
-  it('surfaces reconciliation failure instead of returning a stale list', async () => {
-    const syncError = new Error('loop reconciliation failed');
-    const { service, projectConfigRuntime } = createService({
+  it('surfaces sync failure instead of returning a stale list', async () => {
+    const syncError = new Error('loop sync failed');
+    const { service } = createService({
       scheduledTasksRuntime: {
-        syncProject: vi.fn(async () => {
+        syncLoops: vi.fn(async () => {
           throw syncError;
         }),
       },
     });
 
-    await expect(service.list('project-test')).rejects.toBe(syncError);
-    expect(projectConfigRuntime.listScheduledTasks).not.toHaveBeenCalled();
+    await expect(service.list()).rejects.toBe(syncError);
   });
 });
 
 describe('scheduled-task loop-file mutations', () => {
-  it('updates only enabled in loop frontmatter and reconciles the task', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-loop-toggle-'));
+  it('updates only enabled in loop frontmatter and syncs', async () => {
+    const ctx = await createDirs();
     try {
-      const loopFilePath = path.join(tempRoot, 'daily.md');
-      await writeFile(loopFilePath, `---
-name: daily-digest
+      const loopFilePath = await writeSharedLoop(ctx.sharedDir, 'daily.md', `---
 schedule: "0 9 * * *"
 enabled: true
 model: openai/gpt-5
@@ -79,65 +124,151 @@ custom: keep-me
 ---
 
 Run the digest.
-`, 'utf8');
+`);
       const currentTask = { ...loopTask, loopFile: loopFilePath };
       const updatedTask = { ...currentTask, enabled: false };
-      const syncProject = vi.fn()
+      const syncLoops = vi.fn()
         .mockResolvedValueOnce([currentTask])
         .mockResolvedValueOnce([updatedTask]);
-      const { service } = createService({ scheduledTasksRuntime: { syncProject } });
+      const { service } = createService({ scheduledTasksRuntime: { syncLoops } });
 
-      await expect(service.setLoopEnabled('project-test', currentTask.id, false)).resolves.toEqual(updatedTask);
+      await expect(service.setLoopEnabled(currentTask.id, false)).resolves.toEqual(updatedTask);
 
       const content = await readFile(loopFilePath, 'utf8');
       expect(content).toContain('enabled: false');
       expect(content).toContain('custom: keep-me');
       expect(content).toContain('Run the digest.');
-      expect(syncProject).toHaveBeenCalledTimes(2);
+      expect(syncLoops).toHaveBeenCalledTimes(2);
     } finally {
-      await rm(tempRoot, { recursive: true, force: true });
+      await ctx.cleanup();
     }
   });
 
-  it('deletes the authoritative loop file and reconciles the task away', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-loop-remove-'));
+  it('deletes the authoritative loop file and syncs the task away', async () => {
+    const ctx = await createDirs();
     try {
-      const loopFilePath = path.join(tempRoot, 'daily.md');
-      await writeFile(loopFilePath, 'loop', 'utf8');
+      const loopFilePath = await writeSharedLoop(ctx.sharedDir, 'daily.md', `---
+schedule: "0 9 * * *"
+model: openai/gpt-5
+---
+Run.
+`);
       const currentTask = { ...loopTask, loopFile: loopFilePath };
-      const syncProject = vi.fn()
+      const syncLoops = vi.fn()
         .mockResolvedValueOnce([currentTask])
         .mockResolvedValueOnce([]);
-      const { service } = createService({ scheduledTasksRuntime: { syncProject } });
+      const { service } = createService({ scheduledTasksRuntime: { syncLoops } });
 
-      await expect(service.removeLoopFile('project-test', currentTask.id)).resolves.toEqual([]);
+      await expect(service.removeLoopFile(currentTask.id)).resolves.toEqual([]);
       await expect(readFile(loopFilePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
-      expect(syncProject).toHaveBeenCalledTimes(2);
+      expect(syncLoops).toHaveBeenCalledTimes(2);
     } finally {
-      await rm(tempRoot, { recursive: true, force: true });
+      await ctx.cleanup();
     }
   });
 
   it('does not rewrite a malformed loop when toggling', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-loop-invalid-'));
+    const ctx = await createDirs();
     try {
-      const loopFilePath = path.join(tempRoot, 'daily.md');
-      const malformed = '---\nname: daily-digest\n---\nRun.\n';
-      await writeFile(loopFilePath, malformed, 'utf8');
+      const loopFilePath = await writeSharedLoop(ctx.sharedDir, 'daily.md', '---\nschedule: "0 9 * * *"\n---\nRun.\n');
       const currentTask = { ...loopTask, loopFile: loopFilePath };
-      const syncProject = vi.fn(async () => [currentTask]);
-      const { service } = createService({ scheduledTasksRuntime: { syncProject } });
+      const syncLoops = vi.fn(async () => [currentTask]);
+      const { service } = createService({ scheduledTasksRuntime: { syncLoops } });
 
-      await expect(service.setLoopEnabled('project-test', currentTask.id, false)).rejects.toMatchObject({ statusCode: 400 });
-      await expect(readFile(loopFilePath, 'utf8')).resolves.toBe(malformed);
-      expect(syncProject).toHaveBeenCalledOnce();
+      await expect(service.setLoopEnabled(currentTask.id, false)).rejects.toMatchObject({ statusCode: 400 });
+      await expect(readFile(loopFilePath, 'utf8')).resolves.toBe('---\nschedule: "0 9 * * *"\n---\nRun.\n');
+      expect(syncLoops).toHaveBeenCalledOnce();
     } finally {
-      await rm(tempRoot, { recursive: true, force: true });
+      await ctx.cleanup();
+    }
+  });
+
+  it('404s unknown task ids', async () => {
+    const { service } = createService({
+      scheduledTasksRuntime: { syncLoops: vi.fn(async () => []) },
+    });
+
+    await expect(service.setLoopEnabled('loop:nope', true)).rejects.toMatchObject({ statusCode: 404 });
+    await expect(service.removeLoopFile('loop:nope')).rejects.toMatchObject({ statusCode: 404 });
+    await expect(service.run('loop:nope')).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe('scheduled-task service create', () => {
+  const validTask = {
+    name: 'daily-digest',
+    enabled: true,
+    schedule: { kind: 'cron', cron: '0 9 * * *', timezone: 'UTC' },
+    execution: { prompt: 'Run the digest.', providerID: 'openai', modelID: 'gpt-5', agent: 'plan' },
+  };
+
+  it('writes a new loop file without a name key and returns the synced task', async () => {
+    const ctx = await createDirs();
+    try {
+      const createdTask = { ...loopTask, loopFile: path.join(ctx.sharedDir, 'daily-digest.md') };
+      const syncLoops = vi.fn(async () => [createdTask]);
+      const { service } = createService({ scheduledTasksRuntime: { syncLoops } });
+
+      const result = await service.create({ location: 'shared', task: validTask });
+
+      expect(result.created).toBe(true);
+      expect(result.task).toEqual(createdTask);
+      const content = await readFile(path.join(ctx.sharedDir, 'daily-digest.md'), 'utf8');
+      expect(content).toContain('Run the digest.');
+      expect(content).toContain('openai/gpt-5');
+      expect(content).not.toMatch(/^name:/m);
+    } finally {
+      await ctx.cleanup();
+    }
+  });
+
+  it('rejects invalid payloads with 400', async () => {
+    const { service } = createService();
+    await expect(service.create({ location: 'nowhere', task: validTask }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    await expect(service.create({ location: 'shared', task: { ...validTask, name: '  ' } }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    await expect(service.create({ location: 'shared', task: { ...validTask, schedule: { kind: 'daily', time: '09:00' } } }))
+      .rejects.toMatchObject({ statusCode: 400, message: expect.stringContaining('cron') });
+    await expect(service.create({ location: 'shared', task: { ...validTask, schedule: { kind: 'cron', cron: 'not a cron' } } }))
+      .rejects.toMatchObject({ statusCode: 400 });
+    await expect(service.create({
+      location: 'shared',
+      task: { ...validTask, schedule: { kind: 'cron', cron: '0 9 * * *', timezone: 'Mars/Olympus' } },
+    })).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('rejects invalid directories with 400', async () => {
+    const { service } = createService({
+      service: {
+        validateDirectoryPath: async () => ({ ok: false, error: 'Directory not found' }),
+      },
+    });
+    await expect(service.create({
+      location: 'local',
+      task: { ...validTask, execution: { ...validTask.execution, directory: '/nope' } },
+    })).rejects.toMatchObject({ statusCode: 400, message: 'Directory not found' });
+  });
+
+  it('returns 409 when the loop file already exists', async () => {
+    const ctx = await createDirs();
+    try {
+      await writeSharedLoop(ctx.sharedDir, 'daily-digest.md', `---
+schedule: "0 9 * * *"
+model: openai/gpt-5
+---
+Taken.
+`);
+      const { service } = createService();
+      await expect(service.create({ location: 'shared', task: validTask }))
+        .rejects.toMatchObject({ statusCode: 409 });
+    } finally {
+      await ctx.cleanup();
     }
   });
 });
 
-describe('scheduled-task loop-file routes', () => {
+describe('scheduled-task global routes', () => {
   const createResponse = () => ({
     statusCode: 200,
     payload: null,
@@ -154,33 +285,56 @@ describe('scheduled-task loop-file routes', () => {
   const captureHandlers = (scheduledTaskService) => {
     const handlers = new Map();
     const app = {
-      get: vi.fn(),
-      put: vi.fn(),
-      post: vi.fn(),
+      get: vi.fn((route, handler) => handlers.set(`GET ${route}`, handler)),
+      put: vi.fn((route, handler) => handlers.set(`PUT ${route}`, handler)),
+      post: vi.fn((route, handler) => handlers.set(`POST ${route}`, handler)),
       patch: vi.fn((route, handler) => handlers.set(`PATCH ${route}`, handler)),
       delete: vi.fn((route, handler) => handlers.set(`DELETE ${route}`, handler)),
     };
     registerScheduledTaskRoutes(app, {
       scheduledTaskService,
-      readSettingsFromDiskMigrated: vi.fn(),
-      sanitizeProjects: vi.fn(),
-      projectConfigRuntime: {},
-      scheduledTasksRuntime: {},
       getOpenChamberEventClients: () => new Set(),
       writeSseEvent: vi.fn(),
     });
     return handlers;
   };
 
+  it('lists tasks globally without a project id', async () => {
+    const list = vi.fn(async () => [loopTask]);
+    const handlers = captureHandlers({ list });
+    const handler = handlers.get('GET /api/openchamber/scheduled-tasks');
+    const res = createResponse();
+
+    await handler({}, res);
+
+    expect(list).toHaveBeenCalledWith();
+    expect(res.statusCode).toBe(200);
+    expect(res.payload).toEqual({ tasks: [loopTask] });
+    expect(handlers.has('GET /api/projects/:projectId/scheduled-tasks')).toBe(false);
+  });
+
+  it('creates loop files through the global endpoint', async () => {
+    const create = vi.fn(async () => ({ task: loopTask, created: true }));
+    const handlers = captureHandlers({ create });
+    const handler = handlers.get('POST /api/openchamber/scheduled-tasks');
+    const res = createResponse();
+    const task = { name: 'x' };
+
+    await handler({ body: { location: 'local', task } }, res);
+
+    expect(create).toHaveBeenCalledWith({ location: 'local', task });
+    expect(res.statusCode).toBe(201);
+  });
+
   it('routes loop enabled changes through the loop-file service', async () => {
     const setLoopEnabled = vi.fn(async () => ({ ...loopTask, enabled: false }));
     const handlers = captureHandlers({ setLoopEnabled });
-    const handler = handlers.get('PATCH /api/projects/:projectId/scheduled-tasks/:taskId/loop-file');
+    const handler = handlers.get('PATCH /api/openchamber/scheduled-tasks/:taskId/enabled');
     const res = createResponse();
 
-    await handler({ params: { projectId: 'project-test', taskId: loopTask.id }, body: { enabled: false } }, res);
+    await handler({ params: { taskId: loopTask.id }, body: { enabled: false } }, res);
 
-    expect(setLoopEnabled).toHaveBeenCalledWith('project-test', loopTask.id, false);
+    expect(setLoopEnabled).toHaveBeenCalledWith(loopTask.id, false);
     expect(res.statusCode).toBe(200);
     expect(res.payload.task.enabled).toBe(false);
   });
@@ -188,78 +342,26 @@ describe('scheduled-task loop-file routes', () => {
   it('routes loop deletion through the loop-file service', async () => {
     const removeLoopFile = vi.fn(async () => []);
     const handlers = captureHandlers({ removeLoopFile });
-    const handler = handlers.get('DELETE /api/projects/:projectId/scheduled-tasks/:taskId/loop-file');
+    const handler = handlers.get('DELETE /api/openchamber/scheduled-tasks/:taskId');
     const res = createResponse();
 
-    await handler({ params: { projectId: 'project-test', taskId: loopTask.id } }, res);
+    await handler({ params: { taskId: loopTask.id } }, res);
 
-    expect(removeLoopFile).toHaveBeenCalledWith('project-test', loopTask.id);
+    expect(removeLoopFile).toHaveBeenCalledWith(loopTask.id);
     expect(res.statusCode).toBe(200);
     expect(res.payload).toEqual({ tasks: [] });
   });
-});
 
-describe('scheduled-task service remove', () => {
-  it('rejects deleting a loop-sourced task while its loop file still exists', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-loop-delete-'));
-    try {
-      const loopFilePath = path.join(tempRoot, 'daily.md');
-      await writeFile(loopFilePath, '---\nname: daily-digest\n---\nRun.\n', 'utf8');
+  it('routes manual runs through the global run endpoint', async () => {
+    const run = vi.fn(async () => ({ sessionId: 'ses-1' }));
+    const handlers = captureHandlers({ run });
+    const handler = handlers.get('POST /api/openchamber/scheduled-tasks/:taskId/run');
+    const res = createResponse();
 
-      const { service, projectConfigRuntime, scheduledTasksRuntime } = createService({
-        projectConfigRuntime: {
-          listScheduledTasks: vi.fn(async () => [{ ...loopTask, loopFile: loopFilePath }]),
-        },
-      });
+    await handler({ params: { taskId: loopTask.id } }, res);
 
-      await expect(service.remove('project-test', loopTask.id)).rejects.toMatchObject({
-        statusCode: 400,
-        message: expect.stringContaining('delete the file to remove the task'),
-      });
-      expect(projectConfigRuntime.deleteScheduledTask).not.toHaveBeenCalled();
-      expect(scheduledTasksRuntime.syncProject).not.toHaveBeenCalled();
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('allows deleting a loop-sourced task once its loop file is gone', async () => {
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'oc-loop-delete-'));
-    try {
-      // The loop file was removed from disk; the orphan task is allowed to be
-      // deleted directly instead of waiting for the next reconcile.
-      const loopFilePath = path.join(tempRoot, 'gone.md');
-
-      const { service, projectConfigRuntime, scheduledTasksRuntime } = createService({
-        projectConfigRuntime: {
-          listScheduledTasks: vi.fn(async () => [{ ...loopTask, loopFile: loopFilePath }]),
-        },
-      });
-
-      const tasks = await service.remove('project-test', loopTask.id);
-
-      expect(projectConfigRuntime.deleteScheduledTask).toHaveBeenCalledWith('project-test', loopTask.id);
-      expect(scheduledTasksRuntime.syncProject).toHaveBeenCalled();
-      expect(Array.isArray(tasks)).toBe(true);
-    } finally {
-      await rm(tempRoot, { recursive: true, force: true });
-    }
-  });
-
-  it('deletes JSON-configured tasks normally', async () => {
-    const jsonTask = { ...loopTask, id: 'json-task', loopFile: undefined };
-    const { service, projectConfigRuntime, scheduledTasksRuntime } = createService({
-      projectConfigRuntime: {
-        listScheduledTasks: vi.fn(async () => [jsonTask]),
-        deleteScheduledTask: vi.fn(async () => ({ deleted: true, tasks: [] })),
-      },
-    });
-
-    const tasks = await service.remove('project-test', jsonTask.id);
-
-    expect(projectConfigRuntime.deleteScheduledTask).toHaveBeenCalledWith('project-test', jsonTask.id);
-    expect(scheduledTasksRuntime.syncProject).toHaveBeenCalled();
-    expect(Array.isArray(tasks)).toBe(true);
+    expect(run).toHaveBeenCalledWith(loopTask.id);
+    expect(res.payload).toEqual({ ok: true, sessionId: 'ses-1' });
   });
 });
 
@@ -267,18 +369,19 @@ describe('scheduled-task service run', () => {
   it('forwards persistError when the runtime reports a completion persist failure', async () => {
     const { service } = createService({
       scheduledTasksRuntime: {
+        syncLoops: vi.fn(async () => [{ ...loopTask }]),
         runNow: vi.fn(async () => ({
           ok: true,
           sessionID: 'sess-1',
           task: { id: 'task-1', state: { lastStatus: 'success' } },
-          persistError: 'timeout acquiring project config lock for project-test',
+          persistError: 'timeout acquiring scheduled-tasks config lock',
           reason: 'completion-state-failed',
         })),
       },
     });
 
-    const result = await service.run('project-test', 'task-1');
+    const result = await service.run('loop:daily-digest');
     expect(result.sessionId).toBe('sess-1');
-    expect(result.persistError).toMatch(/timeout acquiring project config lock/);
+    expect(result.persistError).toMatch(/timeout acquiring scheduled-tasks config lock/);
   });
 });

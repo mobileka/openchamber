@@ -87,8 +87,7 @@ import { isEditableEventTarget } from '@/hooks/keyboard-shortcut-dom';
 import { formatShortcutForDisplay, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import { useI18n } from '@/lib/i18n';
 import { sessionEvents } from '@/lib/sessionEvents';
-import { syncScheduledTaskLoops } from '@/lib/scheduledTasksApi';
-import { useProjectsStore } from '@/stores/useProjectsStore';
+import { refreshScheduledTasks } from '@/lib/scheduledTasksApi';
 
 type FileNode = {
   name: string;
@@ -1709,14 +1708,14 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           sessionEvents.requestGitRefresh({ directory: root, paths: [relativePath] });
         }
       }
-      if (root && /(?:^|\/)\.agents\/loops\/[^/]+\.md$/i.test(normalizePath(selectedFile.path))) {
-        const project = useProjectsStore.getState().projects.find((entry) => normalizePath(entry.path) === normalizePath(root));
-        if (project) {
-          try {
-            await syncScheduledTaskLoops(project.id);
-          } catch {
-            toast.error(t('sessions.scheduledTasks.dialog.toast.updateFailed'));
-          }
+      if (/(?:^|\/)\.agents\/loops\/[^/]+\.md$/i.test(normalizePath(selectedFile.path))) {
+        // Either fixed loops dir (local ~/.agents/loops or the shared
+        // $OPENCODE_CONFIG_DIR/.agents/loops): re-sync server-side and tell
+        // open scheduled-tasks surfaces to reload.
+        try {
+          await refreshScheduledTasks();
+        } catch {
+          toast.error(t('sessions.scheduledTasks.dialog.toast.updateFailed'));
         }
       }
       if (selectedFile?.path && isDrawioFile(selectedFile.path)) {
