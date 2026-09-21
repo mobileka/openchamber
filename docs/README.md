@@ -1,4 +1,4 @@
-# <picture><source media="(prefers-color-scheme: dark)" srcset="docs/references/badges/openchamber-logo-dark.svg"><img src="docs/references/badges/openchamber-logo-light.svg" width="32" height="32" align="absmiddle" /></picture> OpenChamber
+# <picture><source media="(prefers-color-scheme: dark)" srcset="references/badges/openchamber-logo-dark.svg"><img src="references/badges/openchamber-logo-light.svg" width="32" height="32" align="absmiddle" /></picture> OpenChamber
 
 [![GitHub stars](https://img.shields.io/github/stars/openchamber/openchamber?style=flat&labelColor=100F0F&color=66800B)](https://github.com/openchamber/openchamber/stargazers)
 [![GitHub release](https://img.shields.io/github/v/release/openchamber/openchamber?style=flat&labelColor=100F0F&color=205EA6)](https://github.com/openchamber/openchamber/releases/latest)
@@ -11,16 +11,16 @@
 
 Start agent work, see what changed, and take it through review and release. Your projects and sessions remain available when you switch devices or step away.
 
-![OpenChamber Chat](docs/references/chat_example.png)
+![OpenChamber Chat](references/chat_example.png)
 
 <details>
 <summary>More screenshots</summary>
 
-![VS Code Extension](packages/vscode/extension.jpg)
+![VS Code Extension](../packages/vscode/extension.jpg)
 
 <p>
-<img src="docs/references/pwa_chat_example.png" width="45%" alt="OpenChamber PWA chat">
-<img src="docs/references/pwa_diff_example.png" width="45%" alt="OpenChamber PWA diff review">
+<img src="references/pwa_chat_example.png" width="45%" alt="OpenChamber PWA chat">
+<img src="references/pwa_diff_example.png" width="45%" alt="OpenChamber PWA diff review">
 </p>
 
 </details>
@@ -119,20 +119,20 @@ OpenChamber binds to localhost by default. Use `--lan` only on a trusted network
 
 Go deeper with the OpenChamber guides:
 
-- [Quick start](packages/docs/content/docs/quickstart.mdx)
-- [Installation](packages/docs/content/docs/install.mdx)
-- [Connect devices](packages/docs/content/docs/connect-devices.mdx)
-- [Private Relay](packages/docs/content/docs/private-relay.mdx)
-- [Multi-run](packages/docs/content/docs/multi-run.mdx)
-- [Session Goals](packages/docs/content/docs/session-goals.mdx)
-- [Changes Walkthrough](packages/docs/content/docs/walkthrough.mdx)
-- [Preview and dev servers](packages/docs/content/docs/preview.mdx)
-- [GitHub workflows](packages/docs/content/docs/github.mdx)
-- [Mobile](packages/docs/content/docs/mobile.mdx)
-- [Security](packages/docs/content/docs/security.mdx)
-- [Troubleshooting](packages/docs/content/docs/troubleshooting.mdx)
+- [Quick start](../packages/docs/content/docs/quickstart.mdx)
+- [Installation](../packages/docs/content/docs/install.mdx)
+- [Connect devices](../packages/docs/content/docs/connect-devices.mdx)
+- [Private Relay](../packages/docs/content/docs/private-relay.mdx)
+- [Multi-run](../packages/docs/content/docs/multi-run.mdx)
+- [Session Goals](../packages/docs/content/docs/session-goals.mdx)
+- [Changes Walkthrough](../packages/docs/content/docs/walkthrough.mdx)
+- [Preview and dev servers](../packages/docs/content/docs/preview.mdx)
+- [GitHub workflows](../packages/docs/content/docs/github.mdx)
+- [Mobile](../packages/docs/content/docs/mobile.mdx)
+- [Security](../packages/docs/content/docs/security.mdx)
+- [Troubleshooting](../packages/docs/content/docs/troubleshooting.mdx)
 
-For self-hosting details, see the [reverse proxy guide](docs/REVERSE_PROXY.md). For custom theme authoring, see the [custom themes guide](docs/CUSTOM_THEMES.md).
+For self-hosting details, see the [reverse proxy guide](REVERSE_PROXY.md). For custom theme authoring, see the [custom themes guide](CUSTOM_THEMES.md).
 
 ## Why OpenCode?
 
@@ -144,7 +144,7 @@ OpenChamber is an independent project and is not affiliated with the OpenCode te
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and contribution guidelines. Documentation authoring guidance lives in [`packages/docs`](packages/docs/README.md).
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for development setup and contribution guidelines. Documentation authoring guidance lives in [`packages/docs`](../packages/docs/README.md).
 
 ## Acknowledgments
 
