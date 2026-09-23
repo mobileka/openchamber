@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import parser from 'cron-parser';
+import { CronExpressionParser } from 'cron-parser';
 import { OpenChamberControlError } from '../openchamber-control/error.js';
 import { setLoopFileEnabled, writeLoopFile, discoverLoops, normalizeLoopFileStem } from './loops.js';
 
@@ -146,7 +146,7 @@ export const createScheduledTaskService = (dependencies) => {
     const cron = asNonEmptyString(schedule.cron);
     if (!cron) throw new OpenChamberControlError('schedule.cron is required', 400);
     try {
-      parser.parseExpression(cron, { currentDate: new Date() });
+      CronExpressionParser.parse(cron, { currentDate: new Date() });
     } catch {
       throw new OpenChamberControlError('schedule.cron is invalid', 400);
     }
