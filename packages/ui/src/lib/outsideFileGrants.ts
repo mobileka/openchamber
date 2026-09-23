@@ -102,15 +102,21 @@ export const resolveOutsideFileReadOptions = async (
   workspaceRoot: string,
   enabled: boolean,
 ): Promise<{ allowOutsideWorkspace: boolean; outsideFileGrant?: string }> => {
-  const allowOutsideWorkspace = enabled
+  const outsideWorkspace = enabled
     && Boolean(workspaceRoot)
     && !isFilePathWithinDirectory(path, workspaceRoot);
-  if (!allowOutsideWorkspace) {
+  if (!outsideWorkspace) {
     return { allowOutsideWorkspace: false };
   }
 
-  return {
-    allowOutsideWorkspace: true,
-    outsideFileGrant: await ensureOutsideFileGrantForDesktop(path, workspaceRoot),
-  };
+  const outsideFileGrant = await ensureOutsideFileGrantForDesktop(path, workspaceRoot);
+  if (!outsideFileGrant) {
+    // Without a grant the server rejects an outside-workspace read outright.
+    // Falling back to the workspace request lets it apply its own allowance
+    // for managed roots (config, chats, loops) instead of demanding a grant
+    // this client can never mint.
+    return { allowOutsideWorkspace: false };
+  }
+
+  return { allowOutsideWorkspace: true, outsideFileGrant };
 };

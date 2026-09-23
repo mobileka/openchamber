@@ -47,8 +47,10 @@ test('renews an expired outside-file grant before returning read options', async
     expect(grantRequests).toBe(2);
 
     switchRuntimeEndpoint({ apiBaseUrl: 'https://remote.example/api', runtimeKey: 'remote' });
+    // Off the local runtime no grant can be minted, so the read falls back to
+    // the workspace request rather than demanding one.
     expect(await resolveOutsideFileReadOptions('C:/outside/file.txt', 'C:/workspace', true))
-      .toEqual({ allowOutsideWorkspace: true, outsideFileGrant: undefined });
+      .toEqual({ allowOutsideWorkspace: false });
     expect(grantRequests).toBe(2);
 
     switchRuntimeEndpoint({ apiBaseUrl: 'http://127.0.0.1:57123/api', runtimeKey: 'local' });
@@ -65,7 +67,7 @@ test('renews an expired outside-file grant before returning read options', async
       outsideFileGrant: 'stale-grant',
       expiresAt: now + 10 * 60 * 1000,
     });
-    expect(await pending).toEqual({ allowOutsideWorkspace: true, outsideFileGrant: undefined });
+    expect(await pending).toEqual({ allowOutsideWorkspace: false });
     switchRuntimeEndpoint({ apiBaseUrl: 'http://127.0.0.1:57123/api', runtimeKey: 'local' });
     expect(getOutsideFileGrant('C:/outside/pending.txt')).toBe(undefined);
   } finally {

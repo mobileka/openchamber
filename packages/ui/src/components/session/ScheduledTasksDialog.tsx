@@ -27,6 +27,7 @@ import {
   type ScheduledTaskStatus,
 } from '@/lib/scheduledTasksApi';
 import { ScheduledTaskEditorDialog } from './ScheduledTaskEditorDialog';
+import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { ensureOutsideFileGrantForDesktop } from '@/lib/outsideFileGrants';
 import { canonicalizeTimezone } from '@/lib/timezones';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
@@ -189,6 +190,7 @@ export function ScheduledTasksDialog() {
   const isMobile = useUIStore((state) => state.isMobile);
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const homeDirectory = useDirectoryStore((state) => state.homeDirectory);
+  const effectiveDirectory = useEffectiveDirectory();
 
   const [tasks, setTasks] = React.useState<ScheduledTask[]>([]);
   // Start in loading state so the first frame after open shows the spinner,
@@ -302,7 +304,10 @@ export function ScheduledTasksDialog() {
     if (!task.loopFile) {
       return;
     }
-    const anchor = task.runDirectory || homeDirectory || null;
+    // The file editor is the context panel's file surface, which is keyed and
+    // rooted on the effective directory; the loop's own run directory would
+    // put the tab in a directory bucket nothing renders.
+    const anchor = effectiveDirectory || homeDirectory || null;
     if (!anchor) {
       return;
     }
@@ -312,7 +317,7 @@ export function ScheduledTasksDialog() {
     setOpen(false);
     useFilesViewTabsStore.getState().setSelectedPath(anchor, task.loopFile, { allowOutsideRoot: true, editableOutsideRoot: true });
     useUIStore.getState().openContextFile(anchor, task.loopFile);
-  }, [homeDirectory, setOpen]);
+  }, [effectiveDirectory, homeDirectory, setOpen]);
 
   const handleRunNow = React.useCallback(async (task: ScheduledTask) => {
     setMutatingTaskID(task.id);

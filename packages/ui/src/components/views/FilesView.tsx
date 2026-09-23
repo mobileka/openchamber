@@ -886,10 +886,13 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const editableOutsidePaths = useFilesViewTabsStore((state) => (root ? (state.byRoot[root]?.editableOutsidePaths ?? EMPTY_PATHS) : EMPTY_PATHS));
   const isSelectedEditableOutside = Boolean(selectedFilePath
     && selectedFileIsOutsideWorkspace
-    && editableOutsidePaths.some((candidate) => toComparablePath(candidate) === toComparablePath(selectedFilePath)));  const selectedOutsideFileGrant = selectedFileIsOutsideWorkspace ? getOutsideFileGrant(selectedFilePath) : undefined;
+    && editableOutsidePaths.some((candidate) => toComparablePath(candidate) === toComparablePath(selectedFilePath)));
+  const selectedOutsideFileGrant = selectedFileIsOutsideWorkspace ? getOutsideFileGrant(selectedFilePath) : undefined;
   const selectedFileReadOptions = React.useMemo(
     () => ({
-      allowOutsideWorkspace: mode === 'editor-only' && selectedFileIsOutsideWorkspace,
+      // The grant is what makes an outside-workspace read legal server-side;
+      // without one the request stays on the workspace path.
+      allowOutsideWorkspace: mode === 'editor-only' && selectedFileIsOutsideWorkspace && Boolean(selectedOutsideFileGrant),
       outsideFileGrant: selectedOutsideFileGrant,
       directory: root || undefined,
     }),
