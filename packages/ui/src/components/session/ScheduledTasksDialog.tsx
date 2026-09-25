@@ -312,7 +312,7 @@ export function ScheduledTasksDialog() {
     }
     setOpen(false);
     useFilesViewTabsStore.getState().setSelectedPath(anchor, task.loopFile, { allowOutsideRoot: true, editableOutsideRoot: true });
-    useUIStore.getState().openContextFile(anchor, task.loopFile);
+    useUIStore.getState().openContextFile(anchor, task.loopFile, { edit: true });
   }, [effectiveDirectory, homeDirectory, setOpen]);
 
   const handleRunNow = React.useCallback(async (task: ScheduledTask) => {

@@ -1101,6 +1101,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const setPendingFileNavigation = useUIStore((state) => state.setPendingFileNavigation);
   const pendingFileFocusPath = useUIStore((state) => state.pendingFileFocusPath);
   const setPendingFileFocusPath = useUIStore((state) => state.setPendingFileFocusPath);
+  const pendingFileEditPath = useUIStore((state) => state.pendingFileEditPath);
   const fileEditorKeymap = useUIStore((state) => state.fileEditorKeymap);
   const settingsDefaultFileViewerPreview = useConfigStore((state) => state.settingsDefaultFileViewerPreview);
   const showMessageTTSButtons = useConfigStore((state) => state.showMessageTTSButtons);
@@ -2606,7 +2607,19 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       // Ignore localStorage errors
     }
     setJsonViewMode(jsonDefault);
-  }, [selectedFile?.path, settingsDefaultFileViewerPreview]);
+
+    // An explicit open-for-edit intent (the scheduler's Edit action) lands in
+    // the editor even when the file-viewer default says preview.
+    if (pendingFileEditPath && normalizePath(pendingFileEditPath) === selectedPath) {
+      useUIStore.getState().setPendingFileEditPath(null);
+      textViewModeByPathRef.current[selectedPath] = 'edit';
+      mdViewModeByPathRef.current[selectedPath] = 'edit';
+      htmlViewModeByPathRef.current[selectedPath] = 'edit';
+      setTextViewMode('edit');
+      setMdViewMode('edit');
+      setHtmlViewMode('edit');
+    }
+  }, [selectedFile?.path, settingsDefaultFileViewerPreview, pendingFileEditPath]);
 
   const saveTextViewMode = React.useCallback((mode: TextViewMode) => {
     const selectedPath = selectedFile?.path;

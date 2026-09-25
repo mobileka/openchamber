@@ -841,6 +841,7 @@ interface UIStore {
   pendingDiffScope: PendingDiffScope | null;
   pendingFileNavigation: PendingFileNavigation | null;
   pendingFileFocusPath: string | null;
+  pendingFileEditPath: string | null;
   isMobile: boolean;
   isCommandPaletteOpen: boolean;
   isHelpDialogOpen: boolean;
@@ -1035,7 +1036,7 @@ interface UIStore {
   openContextSurface: (directory: string, mode: ContextPanelMode) => void;
   openContextPanelTab: (directory: string, tab: ContextPanelTabDescriptor, options?: { reveal?: boolean }) => void;
   openContextDiff: (directory: string, filePath: string, staged?: boolean, scope?: PendingDiffScope | null) => void;
-  openContextFile: (directory: string, filePath: string) => void;
+  openContextFile: (directory: string, filePath: string, options?: { edit?: boolean }) => void;
   openContextFileAtLine: (directory: string, filePath: string, line: number, column?: number) => void;
   openContextOverview: (directory: string) => void;
   openContextPreview: (directory: string, url: string) => void;
@@ -1069,6 +1070,7 @@ interface UIStore {
   setPendingDiffFile: (filePath: string | null, staged?: boolean, scope?: PendingDiffScope | null) => void;
   setPendingFileNavigation: (navigation: PendingFileNavigation | null) => void;
   setPendingFileFocusPath: (path: string | null) => void;
+  setPendingFileEditPath: (path: string | null) => void;
   navigateToDiff: (filePath: string, staged?: boolean, scope?: PendingDiffScope | null) => void;
   consumePendingDiffFile: () => string | null;
   setIsMobile: (isMobile: boolean) => void;
@@ -1267,6 +1269,7 @@ export const useUIStore = create<UIStore>()(
         pendingDiffScope: null,
         pendingFileNavigation: null,
         pendingFileFocusPath: null,
+        pendingFileEditPath: null,
         isMobile: false,
         isCommandPaletteOpen: false,
         isHelpDialogOpen: false,
@@ -1562,7 +1565,7 @@ export const useUIStore = create<UIStore>()(
           });
         },
 
-        openContextFile: (directory, filePath) => {
+        openContextFile: (directory, filePath, options) => {
           const normalizedDirectory = normalizeDirectoryPath((directory || '').trim());
           const normalizedFilePath = normalizeContextTargetPath(filePath);
           if (!normalizedDirectory || !normalizedFilePath) {
@@ -1572,6 +1575,7 @@ export const useUIStore = create<UIStore>()(
           get().openContextPanelTab(normalizedDirectory, { mode: 'file', targetPath: normalizedFilePath });
           get().setPendingFileFocusPath(normalizedFilePath);
           get().setPendingFileNavigation(null);
+          get().setPendingFileEditPath(options?.edit ? normalizedFilePath : null);
         },
 
         openContextFileAtLine: (directory, filePath, line, column) => {
@@ -1984,6 +1988,10 @@ export const useUIStore = create<UIStore>()(
 
         setPendingFileFocusPath: (path) => {
           set({ pendingFileFocusPath: path });
+        },
+
+        setPendingFileEditPath: (path) => {
+          set({ pendingFileEditPath: path });
         },
 
         navigateToDiff: (filePath, staged = false, scope = null) => {

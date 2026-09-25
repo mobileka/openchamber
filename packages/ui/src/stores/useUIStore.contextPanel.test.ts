@@ -679,6 +679,18 @@ describe('useUIStore file editor visibility', () => {
   });
 });
 
+describe('useUIStore openContextFile edit intent', () => {
+  const directory = '/repo';
+
+  test('marks the file for edit mode and clears it on a plain open', () => {
+    useUIStore.getState().openContextFile(directory, '/repo/loops/update-commandcode-models.md', { edit: true });
+    expect(useUIStore.getState().pendingFileEditPath).toBe('/repo/loops/update-commandcode-models.md');
+
+    useUIStore.getState().openContextFile(directory, '/repo/other.md');
+    expect(useUIStore.getState().pendingFileEditPath).toBeNull();
+  });
+});
+
 describe('useUIStore closeContextPanelTab surface stability', () => {
   const directory = '/repo';
 
