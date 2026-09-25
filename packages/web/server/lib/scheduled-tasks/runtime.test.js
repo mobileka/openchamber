@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import os from 'os';
 import path from 'path';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
@@ -11,21 +11,7 @@ import {
 } from './runtime.js';
 import { createProjectConfigRuntime } from '../projects/project-config.js';
 
-const sdk = vi.hoisted(() => ({
-  sessionCreates: [],
-}));
-
-vi.mock('@opencode-ai/sdk/v2', () => ({
-  createOpencodeClient: () => ({
-    session: {
-      create: async (args) => {
-        sdk.sessionCreates.push(args);
-        return { data: { id: `ses-${sdk.sessionCreates.length}` } };
-      },
-    },
-    command: { list: async () => ({ data: [] }) },
-  }),
-}));
+const sessionCreates = [];
 
 describe('scheduled-tasks runtime helpers', () => {
   it.each([
@@ -175,8 +161,21 @@ describe('scheduled-tasks runtime syncLoops wiring', () => {
     originalHomedir = os.homedir;
     vi.spyOn(os, 'homedir').mockReturnValue(home);
     originalFetch = globalThis.fetch;
-    globalThis.fetch = vi.fn(async () => ({ ok: true, text: async () => '' }));
-    sdk.sessionCreates.length = 0;
+    globalThis.fetch = vi.fn(async (input, init = {}) => {
+      const { pathname } = new URL(String(input));
+      let data = {};
+      if (pathname === '/api/session' && init.method === 'POST') {
+        sessionCreates.push(JSON.parse(init.body));
+        data = { id: `ses-${sessionCreates.length}` };
+      } else if (pathname === '/api/command') {
+        data = [];
+      }
+      return new Response(JSON.stringify({ location: { directory: '/repo' }, data }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    sessionCreates.length = 0;
     runtimes = [];
   });
 
@@ -300,8 +299,60 @@ Run at default.
     const fallback = await runtime.runNow('loop:default-dir');
     expect(fallback.ok).toBe(true);
 
-    expect(sdk.sessionCreates).toHaveLength(2);
-    expect(sdk.sessionCreates[0].directory).toBe(customDir);
-    expect(sdk.sessionCreates[1].directory).toBe(defaultRunDirectory);
+    expect(sessionCreates).toHaveLength(2);
+    expect(sessionCreates[0].location.directory).toBe(customDir);
+    expect(sessionCreates[1].location.directory).toBe(defaultRunDirectory);
+  });
+});
+
+describe('scheduled-tasks runtime prompt dispatch', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('parks the briefing with resume: false so execution starts on the task prompt', async () => {
+    const posts = [];
+    vi.stubGlobal('fetch', vi.fn(async (input, init = {}) => {
+      const { pathname } = new URL(String(input));
+      if (init.method === 'POST') posts.push({ pathname, body: JSON.parse(init.body) });
+      const data = pathname === '/api/session' ? { id: 'ses_run' } : pathname === '/api/command' ? [] : {};
+      return new Response(JSON.stringify({ location: { directory: '/repo' }, data }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const task = {
+      id: 'task-1',
+      name: 'Nightly',
+      enabled: true,
+      schedule: { kind: 'daily', times: ['03:00'], timezone: 'UTC' },
+      execution: { prompt: 'Review open issues', providerID: 'openai', modelID: 'gpt-5', goalEnabled: true, goalTokenBudget: 50_000 },
+      state: { createdAt: 1, updatedAt: 1 },
+    };
+    const runtime = createScheduledTasksRuntime({
+      projectConfigRuntime: {
+        listScheduledTasks: async () => [task],
+        reconcileLoopTasks: async () => [task],
+        updateScheduledTaskState: async () => ({ task, updated: true }),
+        updateScheduledTaskStateIf: async () => ({ task, updated: true }),
+      },
+      listProjects: async () => [{ id: 'proj', path: '/repo' }],
+      buildOpenCodeUrl: () => 'http://127.0.0.1:1/',
+      getOpenCodeAuthHeaders: () => ({}),
+      waitForOpenCodeReady: async () => {},
+      persistSessionGoal: async () => undefined,
+      sessionKnowledgeRuntime: {
+        resolvePendingForSession: async () => ({ text: 'Project background', signature: 'sig' }),
+        recordDelivered: async () => undefined,
+      },
+      logger: { info: () => {}, warn: () => {}, error: () => {} },
+    });
+    await runtime.start();
+    await runtime.runNow('task-1');
+    runtime.stop();
+
+    const dispatch = posts.filter((post) => post.pathname.startsWith('/api/session/ses_run/'));
+    expect(dispatch.map((post) => post.pathname.split('/').at(-1))).toEqual(['synthetic', 'synthetic', 'prompt']);
+    expect(dispatch[0].body).toMatchObject({ text: 'Project background', resume: false });
+    expect(dispatch[1].body.resume).toBe(false);
+    expect(dispatch[2].body).toMatchObject({ text: 'Review open issues' });
+    expect(dispatch[2].body.resume).toBeUndefined();
   });
 });

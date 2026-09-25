@@ -9,20 +9,20 @@ import {
 describe('pickMostRecentSession', () => {
   it('picks the session with the newest update time', () => {
     const picked = pickMostRecentSession([
-      { id: 'old', directory: '/work/a', time: { updated: 100 } },
-      { id: 'new', directory: '/work/b', time: { updated: 300 } },
-      { id: 'middle', directory: '/work/c', time: { updated: 200 } },
+      { id: 'old', location: { directory: '/work/a' }, time: { updated: 100 } },
+      { id: 'new', location: { directory: '/work/b' }, time: { updated: 300 } },
+      { id: 'middle', location: { directory: '/work/c' }, time: { updated: 200 } },
     ]);
     expect(picked).toEqual({ id: 'new', directory: '/work/b', updated: 300 });
   });
 
   it('ignores archived, malformed and directory-less sessions', () => {
     expect(pickMostRecentSession([
-      { id: 'archived', directory: '/work/a', time: { updated: 900, archived: 950 } },
-      { id: 'no-time', directory: '/work/b' },
+      { id: 'archived', location: { directory: '/work/a' }, time: { updated: 900, archived: 950 } },
+      { id: 'no-time', location: { directory: '/work/b' } },
       { id: 'no-directory', time: { updated: 800 } },
       null,
-      { id: 'valid', directory: '/work/c', time: { updated: 100 } },
+      { id: 'valid', location: { directory: '/work/c' }, time: { updated: 100 } },
     ])).toEqual({ id: 'valid', directory: '/work/c', updated: 100 });
   });
 
@@ -34,8 +34,8 @@ describe('pickMostRecentSession', () => {
 
 describe('createRestartNotifier', () => {
   const listSessions = async () => [
-    { id: 'recent', directory: '/work/app', time: { updated: 20 } },
-    { id: 'older', directory: '/work/app', time: { updated: 10 } },
+    { id: 'recent', location: { directory: '/work/app' }, time: { updated: 20 } },
+    { id: 'older', location: { directory: '/work/app' }, time: { updated: 10 } },
   ];
 
   it('waits for OpenCode and sends the notice to the most recent session', async () => {

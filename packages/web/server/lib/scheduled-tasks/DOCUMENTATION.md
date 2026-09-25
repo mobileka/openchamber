@@ -201,3 +201,7 @@ every `syncLoops`:
   - `GET /api/openchamber/scheduled-tasks/status` (also reports the
     server-resolved `defaultRunDirectory`, shown verbatim in the UI)
   - `GET /api/openchamber/events`
+
+The shared `/api/openchamber/events` stream also carries web notifications.
+Its connection ownership and browser capability flag stay unchanged. Delivery
+and duplicate handling are documented in `../notifications/DOCUMENTATION.md`.

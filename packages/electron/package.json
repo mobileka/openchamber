@@ -1,11 +1,14 @@
 {
   "name": "@openchamber/electron",
-  "version": "1.24.2",
+  "version": "2.0.1",
   "private": true,
   "description": "Electron desktop runtime for OpenChamber",
   "author": "OpenChamber",
   "type": "module",
   "main": "./dist-bundle/entry.mjs",
+  "opencodeCli": {
+    "version": "2.0.16"
+  },
   "dependencies": {
     "@openchamber/web": "workspace:*",
     "electron-context-menu": "^4.1.2",

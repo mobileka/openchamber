@@ -5,7 +5,6 @@ import { Icon } from '@/components/icon/Icon';
 import { SettingsFieldRow, SettingsSection, SETTINGS_ICON_BUTTON_CLASS } from '@/components/sections/shared/SettingsSection';
 import { useUIStore } from '@/stores/useUIStore';
 import { updateDesktopSettings } from '@/lib/persistence';
-import { isVSCodeRuntime } from '@/lib/desktop';
 import {
   formatShortcutForDisplay,
   getCustomizableShortcutActions,
@@ -35,10 +34,7 @@ export const KeyboardShortcutsSettings: React.FC = () => {
   const [shortcutFilter, setShortcutFilter] = React.useState<ShortcutCombo | null>(null);
   const [isShortcutSearchOpen, setShortcutSearchOpen] = React.useState(false);
 
-  const actions = React.useMemo(() => {
-    const all = getCustomizableShortcutActions();
-    return isVSCodeRuntime() ? all.filter((action) => action.id !== 'toggle_prompt_navigator') : all;
-  }, []);
+  const actions = React.useMemo(() => getCustomizableShortcutActions(), []);
 
   const rankById = React.useMemo(() => {
     const ranked = rankVisibleShortcutActions(actions, {

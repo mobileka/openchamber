@@ -1,3 +1,4 @@
+import { canReuseManagedOpenCodePreflight } from './opencode-readiness.mjs';
 import { app, BrowserWindow, dialog, ipcMain, Menu, MessageChannelMain, nativeTheme, net as electronNet, Notification, powerMonitor, powerSaveBlocker, protocol, session, shell, webContents } from 'electron';
 import contextMenu from 'electron-context-menu';
 import log from 'electron-log/main.js';
@@ -234,7 +235,7 @@ const LOCAL_DESKTOP_CLIENT_DEDUPE_KEY = 'desktop-local';
 const REMOTE_DESKTOP_CLIENT_KIND = 'desktop';
 const ENV_OVERRIDE_HOST_ID = '__env';
 const GITHUB_BUG_REPORT_URL = 'https://github.com/openchamber/openchamber/issues/new?template=bug_report.yml';
-const GITHUB_FEATURE_REQUEST_URL = 'https://github.com/openchamber/openchamber/issues/new?template=feature_request.yml';
+const GITHUB_IDEAS_URL = 'https://github.com/openchamber/openchamber/discussions/categories/ideas';
 const DISCORD_INVITE_URL = 'https://discord.gg/ZYRSdnwwKA';
 const INSTALLED_APPS_CACHE_TTL_SECS = 60 * 60 * 24;
 const INSTALLED_APPS_CACHE_FILE = 'discovered-apps.json';
@@ -2696,6 +2697,16 @@ const resolveInitialUrl = async () => {
     ? hmrUiUrl
     : localUrl;
 
+  if (localUiUrl === hmrUiUrl) {
+    // The HMR dev script wipes Vite's dependency cache on every start, so the
+    // regenerated dependency chunks get new names under the same `?v=` hash.
+    // Vite serves those chunks as immutable and Chromium's disk cache survives
+    // app restarts, so a stale chunk set keeps answering 504 "Outdated
+    // Optimize Dep" and the splash never clears. Drop the cache before the
+    // first navigation so the renderer fetches the current chunk set.
+    await session.defaultSession.clearCache();
+  }
+
   state.sidecarUrl = localUrl;
   state.localUiUrl = localUiUrl;
   const localAvailable = Boolean(localUrl);
@@ -3667,6 +3678,13 @@ const handleInvoke = async (browserWindow, command, args = {}) => {
         browserWindow.setTitle(args.title);
       }
       return null;
+
+    case 'desktop_managed_opencode_compatible':
+      return canReuseManagedOpenCodePreflight({
+        apiBaseUrl: args.apiBaseUrl,
+        localOrigin: state.localOrigin,
+        server: state.serverHandle,
+      });
 
     case 'desktop_get_app_version':
       return APP_VERSION;
@@ -4801,7 +4819,7 @@ const buildMacMenu = () => {
         { label: 'Clear Cache', click: () => void handleInvoke(null, 'desktop_clear_cache') },
         { type: 'separator' },
         { label: 'Report a Bug', click: () => shell.openExternal(GITHUB_BUG_REPORT_URL) },
-        { label: 'Request a Feature', click: () => shell.openExternal(GITHUB_FEATURE_REQUEST_URL) },
+        { label: 'Discuss an Idea', click: () => shell.openExternal(GITHUB_IDEAS_URL) },
         { type: 'separator' },
         { label: 'Join Discord', click: () => shell.openExternal(DISCORD_INVITE_URL) },
       ],
@@ -4918,7 +4936,7 @@ const buildAutoHiddenMenu = () => {
         { label: 'Clear Cache', click: () => void handleInvoke(null, 'desktop_clear_cache') },
         { type: 'separator' },
         { label: 'Report a Bug', click: () => shell.openExternal(GITHUB_BUG_REPORT_URL) },
-        { label: 'Request a Feature', click: () => shell.openExternal(GITHUB_FEATURE_REQUEST_URL) },
+        { label: 'Discuss an Idea', click: () => shell.openExternal(GITHUB_IDEAS_URL) },
         { type: 'separator' },
         { label: 'Join Discord', click: () => shell.openExternal(DISCORD_INVITE_URL) },
       ],

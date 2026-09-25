@@ -273,7 +273,34 @@ const getUrlAuthTokenFromRequest = (req) => {
       token = undefined;
     }
   }
-  return typeof token === 'string' && token.trim() ? token.trim() : null;
+  if (typeof token === 'string' && token.trim()) return token.trim();
+  return getServedPageSubresourceToken(req);
+};
+
+/**
+ * An HTML file shown through `/api/fs/serve/` loads its own images, styles
+ * and scripts with plain relative URLs, which carry no token: only the page's
+ * URL has one. The browser sends that page URL as the Referer of every
+ * same-origin subresource request, so the page's token is taken from there,
+ * and only when both the page and the subresource live under `/api/fs/serve/`.
+ * Nothing else about the token changes: it is still checked for validity,
+ * expiry and scope like a query token.
+ */
+const SERVED_PAGE_PREFIX = '/api/fs/serve/';
+
+const getServedPageSubresourceToken = (req) => {
+  if (!getRequestPathname(req).startsWith(SERVED_PAGE_PREFIX)) return null;
+  const referer = req?.headers?.referer;
+  const value = Array.isArray(referer) ? referer[0] : referer;
+  if (typeof value !== 'string' || !value) return null;
+  try {
+    const url = new URL(value);
+    if (!url.pathname.startsWith(SERVED_PAGE_PREFIX)) return null;
+    const token = url.searchParams.get('oc_url_token');
+    return token && token.trim() ? token.trim() : null;
+  } catch {
+    return null;
+  }
 };
 
 const getRequestPathname = (req) => {
@@ -317,6 +344,10 @@ const parseUrlAuthScope = (value) => {
 
 const isGuestScopedPath = (pathname, guestId) => pathname.startsWith(`/api/guests/${guestId}/`);
 
+// An isolated space's raw file and its sockets, under `/api/spaces/<id>/`, matched by shape.
+const SPACE_RAW_FILE_PATH = /^\/api\/spaces\/[0-9a-f]{12}\/fs\/raw$/;
+const SPACE_WS_PATH = /^\/api\/spaces\/[0-9a-f]{12}\/(?:terminal\/ws|dev-tunnel|event\/ws|global\/event\/ws)$/;
+
 const isUrlAuthReadableHttpPath = (pathname) => {
   return pathname === '/api/event'
     || pathname === '/api/global/event'
@@ -329,7 +360,8 @@ const isUrlAuthReadableHttpPath = (pathname) => {
     || pathname.startsWith('/api/preview/proxy/')
     || /^\/api\/projects\/[^/]+\/icon$/.test(pathname)
     || pathname === '/api/guests'
-    || /^\/api\/guests\/[a-z][a-z0-9-]*\//.test(pathname);
+    || /^\/api\/guests\/[a-z][a-z0-9-]*\//.test(pathname)
+    || SPACE_RAW_FILE_PATH.test(pathname);
 };
 
 const isUrlAuthWebSocketPath = (pathname) => {
@@ -340,7 +372,8 @@ const isUrlAuthWebSocketPath = (pathname) => {
     || pathname === '/api/dictation/ws'
     || pathname === '/api/dev-tunnel'
     || /^\/api\/guests\/[a-z][a-z0-9-]*\/surface\/ws$/.test(pathname)
-    || pathname.startsWith('/api/preview/proxy/');
+    || pathname.startsWith('/api/preview/proxy/')
+    || SPACE_WS_PATH.test(pathname);
 };
 
 const canUseUrlAuthTokenForRequest = (req, scope = null) => {

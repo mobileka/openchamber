@@ -3,11 +3,11 @@ export const RESTART_NOTIFY_PROMPT = 'OpenChamber restarted on this Mac. Confirm
 export const pickMostRecentSession = (sessions) => {
   const candidates = (Array.isArray(sessions) ? sessions : [])
     .filter((session) => typeof session?.id === 'string' && session.id.trim().length > 0)
-    .filter((session) => typeof session?.directory === 'string' && session.directory.trim().length > 0)
+    .filter((session) => typeof session?.location?.directory === 'string' && session.location.directory.trim().length > 0)
     .filter((session) => !session?.time?.archived)
     .map((session) => ({
       id: session.id,
-      directory: session.directory,
+      directory: session.location.directory,
       updated: Number(session?.time?.updated),
     }))
     .filter((session) => Number.isFinite(session.updated));

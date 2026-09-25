@@ -28,7 +28,6 @@ import {
 } from '@/lib/scheduledTasksApi';
 import { ScheduledTaskEditorDialog } from './ScheduledTaskEditorDialog';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
-import { ensureOutsideFileGrantForDesktop } from '@/lib/outsideFileGrants';
 import { canonicalizeTimezone } from '@/lib/timezones';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
 
@@ -311,9 +310,6 @@ export function ScheduledTasksDialog() {
     if (!anchor) {
       return;
     }
-    // Loop files live outside every workspace by design; mint the outside-file
-    // grant first like every other outside-file flow, or the read 403s.
-    await ensureOutsideFileGrantForDesktop(task.loopFile, anchor);
     setOpen(false);
     useFilesViewTabsStore.getState().setSelectedPath(anchor, task.loopFile, { allowOutsideRoot: true, editableOutsideRoot: true });
     useUIStore.getState().openContextFile(anchor, task.loopFile);

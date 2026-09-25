@@ -8,7 +8,18 @@ describe('VS Code webview settings API', () => {
     const originalWindow = globalThis.window;
     // SAFETY: acquireVsCodeApi is an optional webview global and is restored to this exact value below.
     const originalAcquire = (globalThis as typeof globalThis & { acquireVsCodeApi?: unknown }).acquireVsCodeApi;
-    const messages: BridgeRequest[] = [];
+    const posted: Array<{ id?: string; type: string }> = [];
+    // The bridge posts `webview:ready` (no request id) before its first request;
+    // only id-carrying messages are requests waiting for a response.
+    const messages = {
+      shift: (): BridgeRequest | undefined => {
+        while (posted.length > 0) {
+          const message = posted.shift();
+          if (message && typeof message.id === 'string') return message as BridgeRequest;
+        }
+        return undefined;
+      },
+    };
     const testWindow = Object.assign(new EventTarget(), {
       __VSCODE_CONFIG__: { theme: 'light', workspaceFolder: '/workspace' },
     });
@@ -21,7 +32,7 @@ describe('VS Code webview settings API', () => {
       Object.defineProperty(globalThis, 'acquireVsCodeApi', {
         configurable: true,
         value: () => ({
-          postMessage: (message: BridgeRequest) => messages.push(message),
+          postMessage: (message: { id?: string; type: string }) => posted.push(message),
           getState: () => undefined,
           setState: () => undefined,
         }),
@@ -30,19 +41,9 @@ describe('VS Code webview settings API', () => {
       const { createVSCodeSettingsAPI } = await import(`./settings?settings-failure-${Date.now()}`);
       const api = createVSCodeSettingsAPI();
 
-      // The bridge posts a `webview:ready` handshake before the first request,
-      // so select the settings request by type instead of queue position.
-      const takeSettingsRequest = (): BridgeRequest => {
-        const index = messages.findIndex((message) => message.type === 'api:config/settings:get');
-        assert.ok(index >= 0, 'expected a settings request');
-        const [request] = messages.splice(index, 1);
-        assert.ok(request);
-        return request;
-      };
-
       const failedLoad = api.load();
-      const failedRequest = takeSettingsRequest();
-      assert.ok(failedRequest.id);
+      const failedRequest = messages.shift();
+      assert.ok(failedRequest);
       testWindow.dispatchEvent(new MessageEvent('message', {
         data: {
           id: failedRequest.id,
@@ -54,8 +55,8 @@ describe('VS Code webview settings API', () => {
       await assert.rejects(failedLoad, /settings unavailable/);
 
       const successfulLoad = api.load();
-      const successfulRequest = takeSettingsRequest();
-      assert.ok(successfulRequest.id);
+      const successfulRequest = messages.shift();
+      assert.ok(successfulRequest);
       testWindow.dispatchEvent(new MessageEvent('message', {
         data: {
           id: successfulRequest.id,
