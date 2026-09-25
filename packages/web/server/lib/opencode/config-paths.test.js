@@ -1,16 +1,26 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalOpenCodeConfig = process.env.OPENCODE_CONFIG;
+const originalOpenCodeConfigDir = process.env.OPENCODE_CONFIG_DIR;
+
+// OpenChamber resolves the global config dir as OPENCODE_CONFIG_DIR first,
+// XDG_CONFIG_HOME second, so the variable must be cleared for these tests to
+// stay inside their own temp dirs (the VS Code bridge tests do the same).
+beforeEach(() => {
+  delete process.env.OPENCODE_CONFIG_DIR;
+});
 
 afterEach(() => {
   if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
   else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
   if (originalOpenCodeConfig === undefined) delete process.env.OPENCODE_CONFIG;
   else process.env.OPENCODE_CONFIG = originalOpenCodeConfig;
+  if (originalOpenCodeConfigDir === undefined) delete process.env.OPENCODE_CONFIG_DIR;
+  else process.env.OPENCODE_CONFIG_DIR = originalOpenCodeConfigDir;
   vi.resetModules();
 });
 
