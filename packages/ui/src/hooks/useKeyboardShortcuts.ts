@@ -18,7 +18,6 @@ import {
   eventMatchesShortcutPrefix,
   getEffectiveShortcutCombo,
   getEffectiveShortcutPrefix,
-  normalizeCombo,
   resolveShortcutEventDigit,
   resolveShortcutEventKey,
   ShortcutDispatcher,
@@ -37,7 +36,7 @@ import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useGitHubAuthStore } from '@/stores/useGitHubAuthStore';
 import { useLinearAuthStore } from '@/stores/useLinearAuthStore';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
-import { getCycledPrimaryAgentName } from '@/components/chat/mobileControlsUtils';
+import { getCycledPlanBuildAgentName, getCycledPrimaryAgentName } from '@/components/chat/mobileControlsUtils';
 import { focusChatInput } from '@/components/chat/composer/editor/dom';
 import {
   dismissActiveSelectionToolbar,
@@ -120,6 +119,33 @@ export const useKeyboardShortcuts = () => {
       state.openContextSurface(key, 'terminal');
     }
     state.toggleContextPanelExpanded(key);
+  };
+
+  // Agent cycling is a composer action: it yields to an open /btw composer, to
+  // any overlay, and to focus outside the chat input.
+  const canCycleAgentFromEvent = (event: KeyboardEvent): boolean => {
+    if (hasActiveBtwComposer()) return false;
+    const state = useUIStore.getState();
+    const hasOverlay = state.isSettingsDialogOpen
+      || state.isCommandPaletteOpen
+      || state.isHelpDialogOpen
+      || state.isSessionSwitcherOpen
+      || state.isAboutDialogOpen;
+    const isChatInputTarget = event.target instanceof Element
+      && Boolean(event.target.closest('[data-chat-input="true"]'));
+    return !hasOverlay && isChatInputTarget;
+  };
+
+  const applyCycledAgent = (next: string | null): boolean => {
+    if (!next) return false;
+    const config = useConfigStore.getState();
+    config.setAgent(next);
+    useUIStore.getState().addRecentAgent(next);
+    const sessionId = useSessionUIStore.getState().currentSessionId;
+    if (sessionId) {
+      useSelectionStore.getState().saveSessionAgentSelection(sessionId, next);
+    }
+    return true;
   };
 
   useKeybinds({
@@ -230,28 +256,21 @@ export const useKeyboardShortcuts = () => {
       focusChatInput();
     },
     cycle_agent: (event) => {
-      if (hasActiveBtwComposer()) return false;
-      const state = useUIStore.getState();
-      const hasOverlay = state.isSettingsDialogOpen
-        || state.isCommandPaletteOpen
-        || state.isHelpDialogOpen
-        || state.isSessionSwitcherOpen
-        || state.isAboutDialogOpen;
-      const isChatInputTarget = event.target instanceof Element
-        && Boolean(event.target.closest('[data-chat-input="true"]'));
-      if (hasOverlay || !isChatInputTarget) return false;
-      const combo = getEffectiveShortcutCombo('cycle_agent', state.shortcutOverrides);
-      const backward = combo && !combo.includes('shift') ? normalizeCombo(`shift+${combo}`) : '';
-      const direction = backward && eventMatchesShortcut(event, backward) ? -1 : 1;
+      if (!canCycleAgentFromEvent(event)) return false;
       const config = useConfigStore.getState();
-      const next = getCycledPrimaryAgentName(config.getVisibleAgents(), config.currentAgentName, direction);
-      if (!next) return false;
-      config.setAgent(next);
-      state.addRecentAgent(next);
-      const sessionId = useSessionUIStore.getState().currentSessionId;
-      if (sessionId) {
-        useSelectionStore.getState().saveSessionAgentSelection(sessionId, next);
-      }
+      return applyCycledAgent(getCycledPlanBuildAgentName(
+        config.getVisibleAgents(),
+        config.currentAgentName,
+      ));
+    },
+    cycle_all_agents: (event) => {
+      if (!canCycleAgentFromEvent(event)) return false;
+      const config = useConfigStore.getState();
+      return applyCycledAgent(getCycledPrimaryAgentName(
+        config.getVisibleAgents(),
+        config.currentAgentName,
+        1,
+      ));
     },
     toggle_terminal: () => {
       if (useUIStore.getState().isMobile) return false;
@@ -270,6 +289,16 @@ export const useKeyboardShortcuts = () => {
         || state.isAboutDialogOpen;
       if (state.isSettingsDialogOpen || hasOverlay) return false;
       state.setModelSelectorOpen(!state.isModelSelectorOpen);
+    },
+    open_agent_picker: () => {
+      if (hasActiveBtwComposer()) return false;
+      const state = useUIStore.getState();
+      const hasOverlay = state.isCommandPaletteOpen
+        || state.isHelpDialogOpen
+        || state.isSessionSwitcherOpen
+        || state.isAboutDialogOpen;
+      if (state.isSettingsDialogOpen || hasOverlay) return false;
+      state.setAgentSelectorOpen(!state.isAgentSelectorOpen);
     },
     cycle_thinking_variant: () => {
       if (hasActiveBtwComposer()) return false;
@@ -486,12 +515,6 @@ export const useKeyboardShortcuts = () => {
       if (dispatcher.consumeCapturedPrefixEvent(event)) return;
       if (event.key === 'Escape' || isTerminalEventTarget(event.target)) return;
       if (shortcutRegistry.isSuspended() || hasActiveSelectionToolbar()) return;
-      const combo = getEffectiveShortcutCombo('cycle_agent', useUIStore.getState().shortcutOverrides);
-      const backward = combo && !combo.includes('shift') ? normalizeCombo(`shift+${combo}`) : '';
-      if (backward && eventMatchesShortcut(event, backward)) {
-        if (invokeRegistered('cycle_agent', event)) event.preventDefault();
-        return;
-      }
 
       const rawDigit = resolveShortcutEventDigit(event);
       const switchSurfaceDigit = rawDigit !== null

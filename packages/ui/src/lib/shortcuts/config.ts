@@ -149,6 +149,20 @@ const SHORTCUT_GROUPS = {
       settingsLabelKey: 'settings.openchamber.keyboardShortcuts.action.cycle_agent.label',
     },
     {
+      id: 'cycle_all_agents',
+      defaultBinding: 'shift+tab',
+      customizable: true,
+      settingsLabelKey:
+        'settings.openchamber.keyboardShortcuts.action.cycle_all_agents.label',
+    },
+    {
+      id: 'open_agent_picker',
+      defaultBinding: 'ctrl+x a',
+      customizable: true,
+      settingsLabelKey:
+        'settings.openchamber.keyboardShortcuts.action.open_agent_picker.label',
+    },
+    {
       id: 'cycle_favorite_model_forward',
       defaultBinding: 'ctrl+]',
       customizable: true,

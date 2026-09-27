@@ -171,6 +171,7 @@ const useSessionUIStore = create<SessionUIState>(() => ({
 const useUIStore = create(() => ({
   isMobile: false,
   isModelSelectorOpen: false,
+  isAgentSelectorOpen: false,
   hiddenModels: [],
   providerOrder: [],
   shortcutOverrides: {},
@@ -179,6 +180,7 @@ const useUIStore = create(() => ({
   reorderFavoriteModel: () => undefined,
   setProviderOrder: () => undefined,
   setModelSelectorOpen: () => undefined,
+  setAgentSelectorOpen: () => undefined,
   setSettingsDialogOpen: () => undefined,
   setSettingsPage: () => undefined,
   addRecentAgent: () => undefined,

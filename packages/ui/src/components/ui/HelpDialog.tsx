@@ -80,6 +80,18 @@ export const HelpDialog: React.FC = () => {
           icon: "ai-agent",
         },
         {
+          id: 'cycle_all_agents',
+          keys: '',
+          descriptionKey: "helpDialog.item.cycleAllAgents",
+          icon: "ai-agent",
+        },
+        {
+          id: 'open_agent_picker',
+          keys: '',
+          descriptionKey: "helpDialog.item.openAgentPicker",
+          icon: "ai-agent",
+        },
+        {
           id: 'open_model_selector',
           descriptionKey: "helpDialog.item.openModelSelector",
           icon: "ai-generate-2",
