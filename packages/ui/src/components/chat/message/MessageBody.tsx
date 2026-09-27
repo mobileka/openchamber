@@ -10,7 +10,7 @@ import { MessageFilesDisplay } from '../FileAttachment';
 import type { ToolPart as ToolPartType } from '@/lib/opencode/model';
 import type { StreamPhase, ToolPopupContent, AgentMentionInfo } from './types';
 import type { TurnActivityGroup, TurnChangedFile, TurnGroupingContext } from '../lib/turns/types';
-import { cn } from '@/lib/utils';
+import { cn, capitalizeWords } from '@/lib/utils';
 import { isEmptyTextPart, extractTextContent } from './partUtils';
 import { FadeInOnReveal } from './FadeInOnReveal';
 import { Button } from '@/components/ui/button';
@@ -2348,7 +2348,7 @@ const AssistantMessageBody = React.memo(({
                             {footerAgentName ? (
                                 <span data-fact-priority="2" className="message-footer__fact">
                                     <span className="opacity-60" aria-hidden>·</span>
-                                    {footerAgentName}
+                                    {capitalizeWords(footerAgentName)}
                                 </span>
                             ) : null}
                             {turnDurationText ? (

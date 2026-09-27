@@ -2,7 +2,7 @@
 import React from 'react';
 import { useMobileAppActions } from '@/apps/mobileAppContext';
 import { RuntimeAPIContext } from '@/contexts/runtimeAPIContext';
-import { cn } from '@/lib/utils';
+import { cn, capitalizeWords } from '@/lib/utils';
 import { SimpleMarkdownRenderer } from '../../MarkdownRenderer';
 import { FormMarkdown } from '../../FormMarkdown';
 import { MessageFilesDisplay } from '../../FileAttachment';
@@ -1031,7 +1031,7 @@ const TaskToolSummary: React.FC<{
             openContextPanelTab(currentDirectory, {
                 mode: 'chat',
                 dedupeKey: `session:${sessionId}`,
-                label: agentType.charAt(0).toUpperCase() + agentType.slice(1),
+                label: capitalizeWords(agentType),
                 readOnly: true,
             });
         }
@@ -1078,7 +1078,7 @@ const TaskToolSummary: React.FC<{
                     onClick={handleOpenSession}
                 >
                     <Icon name="external-link" className="h-3.5 w-3.5 flex-shrink-0" />
-                    <span className="typography-meta text-primary font-medium">{t('chat.toolPart.openSubtask', { type: agentType.charAt(0).toUpperCase() + agentType.slice(1) })}</span>
+                    <span className="typography-meta text-primary font-medium">{t('chat.toolPart.openSubtask', { type: capitalizeWords(agentType) })}</span>
                 </button>
             )}
 
