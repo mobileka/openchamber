@@ -67,6 +67,15 @@ describe('shortcut schema', () => {
     expect(getShortcutAction('switch_context_surface')?.defaultBinding).toBe('mod+alt');
   });
 
+  test('splits agent switching across plan/build, all agents, and the picker', () => {
+    expect(getShortcutAction('cycle_agent')?.defaultBinding).toBe('tab');
+    expect(getShortcutAction('cycle_agent')?.category).toBe('models');
+    expect(getShortcutAction('cycle_all_agents')?.defaultBinding).toBe('shift+tab');
+    expect(getShortcutAction('cycle_all_agents')?.category).toBe('models');
+    expect(getShortcutAction('open_agent_picker')?.defaultBinding).toBe('ctrl+x a');
+    expect(getShortcutAction('open_agent_picker')?.category).toBe('models');
+  });
+
   test('every action ships with a default binding', () => {
     // Palette-only commands live outside this schema entirely; an action in
     // the schema without a binding would be dead weight in Settings.
@@ -120,6 +129,7 @@ describe('getShortcutActionsForCombo', () => {
   test('finds a two-chord sequence', () => {
     expect(idsFor('mod+k p')).toEqual(['open_draft_project_picker']);
     expect(idsFor('mod+k t')).toEqual(['open_timeline_dialog']);
+    expect(idsFor('ctrl+x a')).toEqual(['open_agent_picker']);
   });
 
   test('finds held-prefix actions by their digit completion', () => {

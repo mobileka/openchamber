@@ -10,4 +10,12 @@ describe('agentLabel', () => {
     test('falls back to the capitalized id when the display name is blank', () => {
         expect(agentLabel({ name: 'build', displayName: '  ' })).toBe('Build');
     });
+
+    test('capitalizes every word of a display name', () => {
+        expect(agentLabel({ name: 'x', displayName: 'user experience' })).toBe('User Experience');
+    });
+
+    test('capitalizes a hyphenated id', () => {
+        expect(agentLabel({ name: 'code-reviewer', displayName: '' })).toBe('Code-Reviewer');
+    });
 });

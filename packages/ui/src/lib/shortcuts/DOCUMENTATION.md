@@ -45,7 +45,7 @@ The settings recorder captures up to two chords with at most three simultaneous 
 
 Shared `DropdownMenu` and `Select` can opt into this boundary with `disableGlobalShortcuts`; they suspend while open for both controlled and uncontrolled popups and resume on close or unmount. Exact `Ctrl+N` and `Ctrl+P` chords are translated to menu navigation even when the native event reports IME composition; no other composing key is intercepted. Window capture stops an IME Escape before Base UI's document-level dismiss listener without preventing the native IME action. Controlled draft project and worktree pickers close on non-IME Escape from either the trigger or portaled popup.
 
-Terminal capture, Escape abort priming, and the shifted reverse-agent chord are input-boundary exceptions. They preserve their target-specific semantics and invoke the registered application handler rather than duplicating command behavior.
+Terminal capture and Escape abort priming are input-boundary exceptions. They preserve their target-specific semantics and invoke the registered application handler rather than duplicating command behavior.
 
 `[data-btw-composer="true"]` owns Escape instead of main-session abort priming.
 While active, main and Mini Chat model/effort shortcuts yield; main agent,

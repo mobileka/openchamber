@@ -41,10 +41,10 @@ import { useSync } from '@/sync/use-sync';
 import { useUIStore } from '@/stores/useUIStore';
 import { useModelLists } from '@/hooks/useModelLists';
 import { useIsTextTruncated } from '@/hooks/useIsTextTruncated';
-import { formatEffortLabel, getCycledPrimaryAgentName, isPrimaryMode, type MobileControlsPanel } from './mobileControlsUtils';
+import { formatEffortLabel, getCycledPlanBuildAgentName, getCycledPrimaryAgentName, isPrimaryMode, type MobileControlsPanel } from './mobileControlsUtils';
 import { getCurrentIntlLocale, useI18n } from '@/lib/i18n';
 import { useOpenCodeReadiness } from '@/hooks/useOpenCodeReadiness';
-import { eventMatchesShortcut, getEffectiveShortcutCombo, normalizeCombo } from '@/lib/shortcuts';
+import { eventMatchesShortcut, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import { markStartupTrace } from '@/lib/startupTrace';
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
@@ -433,9 +433,20 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     const cycleAgentShortcut = React.useMemo(() => (
         getEffectiveShortcutCombo('cycle_agent', cycleAgentShortcutOverride ? { cycle_agent: cycleAgentShortcutOverride } : undefined)
     ), [cycleAgentShortcutOverride]);
+    const cycleAllAgentsShortcutOverride = useUIStore((state) => state.shortcutOverrides.cycle_all_agents);
+    const cycleAllAgentsShortcut = React.useMemo(() => (
+        getEffectiveShortcutCombo('cycle_all_agents', cycleAllAgentsShortcutOverride ? { cycle_all_agents: cycleAllAgentsShortcutOverride } : undefined)
+    ), [cycleAllAgentsShortcutOverride]);
 
-    // Separate state for agent selector to avoid conflict with model selector
-    const [isAgentSelectorOpen, setIsAgentSelectorOpen] = React.useState(false);
+    // Separate state for agent selector to avoid conflict with model selector.
+    // The main composer shares the open state globally so the keyboard can open
+    // the same dropdown; a controlled BTW selection keeps its own local state.
+    const globalAgentSelectorOpen = useUIStore((state) => !selection && state.isAgentSelectorOpen);
+    const [localAgentSelectorOpen, setLocalAgentSelectorOpen] = React.useState(false);
+    const isAgentSelectorOpen = selection ? localAgentSelectorOpen : globalAgentSelectorOpen;
+    const setAgentSelectorOpen = useUIStore((state) => state.setAgentSelectorOpen);
+    const setAgentSelectorMenuOpen = selection ? setLocalAgentSelectorOpen : setAgentSelectorOpen;
+    const [agentSearchQuery, setAgentSearchQuery] = React.useState('');
     const { favoriteModelsList, recentModelsList } = useModelLists();
     // Auto routing: the server resolves `openchamber/auto` into a real model per
     // send. Offered only while the server says it can honour it, in the main
@@ -545,7 +556,6 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
     }, [isModelSelectorOpen, isCompact]);
 
     // Handle agent selector close behavior
-    const [agentSearchQuery, setAgentSearchQuery] = React.useState('');
     React.useEffect(() => {
         if (!selection && !isAgentSelectorOpen) {
             setAgentSearchQuery('');
@@ -554,6 +564,13 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             }
         }
     }, [isAgentSelectorOpen, isCompact, selection]);
+
+    const agentSearchInputRef = React.useRef<HTMLInputElement>(null);
+    React.useEffect(() => {
+        if (!isAgentSelectorOpen || isCompact) return;
+        const frame = requestAnimationFrame(() => agentSearchInputRef.current?.focus());
+        return () => cancelAnimationFrame(frame);
+    }, [isAgentSelectorOpen, isCompact]);
 
     const selectableDesktopAgents = React.useMemo(() => {
         return agents.filter((agent) => isPrimaryMode(agent.mode));
@@ -1355,30 +1372,22 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         selection,
     ]);
 
-    const handleCycleAgentFromModelPicker = React.useCallback((direction: 1 | -1) => {
-        const nextAgentName = getCycledPrimaryAgentName(agents, currentAgentName, direction);
+    const handleCycleAgentFromModelPicker = React.useCallback((mode: 'plan-build' | 'all') => {
+        const nextAgentName = mode === 'plan-build'
+            ? getCycledPlanBuildAgentName(agents, currentAgentName)
+            : getCycledPrimaryAgentName(agents, currentAgentName, 1);
         if (!nextAgentName) {
             return;
         }
         handleAgentChange(nextAgentName, { closeModelSelector: false });
     }, [agents, currentAgentName, handleAgentChange]);
 
-    const getCycleAgentDirectionFromEvent = React.useCallback((event: KeyboardEvent | React.KeyboardEvent): 1 | -1 | null => {
+    const getCycleAgentModeFromEvent = React.useCallback((event: KeyboardEvent | React.KeyboardEvent): 'plan-build' | 'all' | null => {
         if (selection) return null;
-        const cycleAgentBackwardShortcut = cycleAgentShortcut && !cycleAgentShortcut.includes('shift')
-            ? normalizeCombo(`shift+${cycleAgentShortcut}`)
-            : '';
-
-        if (cycleAgentBackwardShortcut && eventMatchesShortcut(event, cycleAgentBackwardShortcut)) {
-            return -1;
-        }
-
-        if (eventMatchesShortcut(event, cycleAgentShortcut)) {
-            return 1;
-        }
-
+        if (eventMatchesShortcut(event, cycleAgentShortcut)) return 'plan-build';
+        if (eventMatchesShortcut(event, cycleAllAgentsShortcut)) return 'all';
         return null;
-    }, [cycleAgentShortcut, selection]);
+    }, [cycleAgentShortcut, cycleAllAgentsShortcut, selection]);
 
     const handleProviderAndModelChange = (
         providerId: string,
@@ -2363,10 +2372,10 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         };
 
         const handleModelPickerKeyDown = (e: React.KeyboardEvent, selectedItem: ModelPickerEntry | undefined) => {
-            const cycleAgentDirection = getCycleAgentDirectionFromEvent(e);
-            if (cycleAgentDirection) {
+            const cycleAgentMode = getCycleAgentModeFromEvent(e);
+            if (cycleAgentMode) {
                 e.preventDefault();
-                handleCycleAgentFromModelPicker(cycleAgentDirection);
+                handleCycleAgentFromModelPicker(cycleAgentMode);
                 return;
             }
 
@@ -2385,15 +2394,15 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
         };
 
         const handleModelShortcutKeyDownCapture = (e: React.KeyboardEvent) => {
-            const cycleAgentDirection = getCycleAgentDirectionFromEvent(e);
-            if (!cycleAgentDirection) {
+            const cycleAgentMode = getCycleAgentModeFromEvent(e);
+            if (!cycleAgentMode) {
                 return;
             }
 
             e.preventDefault();
             e.stopPropagation();
             keyboardOwnsModelSelectionRef.current = true;
-            handleCycleAgentFromModelPicker(cycleAgentDirection);
+            handleCycleAgentFromModelPicker(cycleAgentMode);
         };
 
         const handleModelMenuOpenChange = (nextOpen: boolean) => {
@@ -2850,7 +2859,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             return (
                 <div className="flex items-center gap-2 min-w-0">
                     <Tooltip delayDuration={600}>
-                        <DropdownMenu open={canSelectAgent && isAgentSelectorOpen} onOpenChange={canSelectAgent ? setIsAgentSelectorOpen : undefined}>
+                        <DropdownMenu open={canSelectAgent && isAgentSelectorOpen} onOpenChange={canSelectAgent ? setAgentSelectorMenuOpen : undefined}>
                             <TooltipTrigger asChild>
                                 <DropdownMenuTrigger asChild>
                                     <div className={cn(
@@ -2906,6 +2915,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                                     <div className="relative">
                                         <Icon name="search" className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
                                         <Input
+                                            ref={agentSearchInputRef}
                                             type="text"
                                             placeholder={t('chat.modelControls.searchAgents')}
                                             value={agentSearchQuery}

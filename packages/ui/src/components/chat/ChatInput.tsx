@@ -69,7 +69,7 @@ import { isVSCodeRuntime } from '@/lib/desktop';
 import { useTabletLayout } from '@/lib/device';
 import { useHardwareKeyboard } from '@/lib/hardwareKeyboard';
 import { isIMECompositionEvent } from '@/lib/ime';
-import { getCycledPrimaryAgentName, type MobileControlsPanel } from './mobileControlsUtils';
+import { getCycledPlanBuildAgentName, getCycledPrimaryAgentName, type MobileControlsPanel } from './mobileControlsUtils';
 import { MobileOverlayPanel } from '@/components/ui/MobileOverlayPanel';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { GitHubIssuePickerDialog } from '@/components/session/GitHubIssuePickerDialog';
@@ -104,7 +104,7 @@ import { sessionEvents } from '@/lib/sessionEvents';
 import { fetchResponseStyleInstruction } from '@/lib/responseStyle';
 import { wrapSystemReminder } from '@/lib/systemReminder';
 import { getSyncMessages } from '@/sync/sync-refs';
-import { eventMatchesShortcut, getEffectiveShortcutCombo, normalizeCombo } from '@/lib/shortcuts';
+import { eventMatchesShortcut, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import {
     assignImageAttachmentFilenames,
     buildAttachmentCitationText,
@@ -595,6 +595,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const cycleAgentShortcut = React.useMemo(() => (
         getEffectiveShortcutCombo('cycle_agent', cycleAgentShortcutOverride ? { cycle_agent: cycleAgentShortcutOverride } : undefined)
     ), [cycleAgentShortcutOverride]);
+    const cycleAllAgentsShortcutOverride = useUIStore((state) => state.shortcutOverrides.cycle_all_agents);
+    const cycleAllAgentsShortcut = React.useMemo(() => (
+        getEffectiveShortcutCombo('cycle_all_agents', cycleAllAgentsShortcutOverride ? { cycle_all_agents: cycleAllAgentsShortcutOverride } : undefined)
+    ), [cycleAllAgentsShortcutOverride]);
     const { currentTheme } = useThemeSystem();
     const chatSearchDirectory = useChatSearchDirectory();
     const ensureGitStatus = useGitStore((state) => state.ensureStatus);
@@ -2295,19 +2299,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             return;
         }
 
-        const cycleAgentBackwardShortcut = cycleAgentShortcut && !cycleAgentShortcut.includes('shift')
-            ? normalizeCombo(`shift+${cycleAgentShortcut}`)
-            : '';
-        const cycleAgentDirection = cycleAgentBackwardShortcut && eventMatchesShortcut(e, cycleAgentBackwardShortcut)
-            ? -1
-            : eventMatchesShortcut(e, cycleAgentShortcut)
-                ? 1
-                : 0;
+        const isCyclePlanBuild = eventMatchesShortcut(e, cycleAgentShortcut);
+        const isCycleAllAgents = eventMatchesShortcut(e, cycleAllAgentsShortcut);
 
-        if (!isBtwActive && cycleAgentDirection !== 0 && openAutocomplete === null) {
+        if (!isBtwActive && (isCyclePlanBuild || isCycleAllAgents) && openAutocomplete === null) {
             e.preventDefault();
             e.stopPropagation();
-            handleCycleAgent(cycleAgentDirection);
+            handleCycleAgent(isCyclePlanBuild ? 'plan-build' : 'all');
             return;
         }
 
@@ -2424,8 +2422,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         void abortCurrentOperation(abortTarget || undefined);
     }, [abortCurrentOperation, btwSessionId, clearAbortPrompt, currentSessionId, isBtwActive]);
 
-    const handleCycleAgent = React.useCallback((direction: 1 | -1 = 1) => {
-        const nextAgentName = getCycledPrimaryAgentName(agents, currentAgentName, direction);
+    const handleCycleAgent = React.useCallback((mode: 'plan-build' | 'all' = 'all') => {
+        const nextAgentName = mode === 'plan-build'
+            ? getCycledPlanBuildAgentName(agents, currentAgentName)
+            : getCycledPrimaryAgentName(agents, currentAgentName, 1);
         if (!nextAgentName) return;
 
         setAgent(nextAgentName);

@@ -123,3 +123,15 @@ export function formatDirectoryName(path: string | null | undefined, homeDirecto
 export function fuzzyMatch(target: string, query: string): boolean {
   return matchesFuzzyQuery(target, query);
 }
+
+/**
+ * Uppercases the first letter of every word. Word boundaries are whitespace,
+ * `-`, and `_`; the rest of the value is left as written, so an existing
+ * capital is never lowered. `build` -> `Build`, `code-reviewer` ->
+ * `Code-Reviewer`, `user experience` -> `User Experience`, `UX` -> `UX`.
+ */
+export function capitalizeWords(value: string): string {
+  return value.replace(/(^|[\s\-_]+)(\S)/g, (_match, boundary: string, first: string) => (
+    boundary + first.toUpperCase()
+  ));
+}
