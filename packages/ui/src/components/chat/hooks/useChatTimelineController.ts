@@ -19,6 +19,12 @@ type PendingScrollRequest = {
     kind: 'turn' | 'message';
     id: string;
     behavior: ScrollBehavior;
+    /**
+     * `nearest` keeps a mounted target where it is unless it sits fully
+     * outside the viewport: the caller (find navigation) positions the match
+     * itself and must not have a row-top settle drag it away.
+     */
+    align: 'top' | 'nearest';
     turnId: string | null;
     resolve: (value: boolean) => void;
 };
@@ -52,7 +58,7 @@ export interface UseChatTimelineControllerResult {
     resumeToBottom: () => void;
     resumeToBottomInstant: () => Promise<void>;
     scrollToTurn: (turnId: string, options?: { behavior?: ScrollBehavior }) => Promise<boolean>;
-    scrollToMessage: (messageId: string, options?: { behavior?: ScrollBehavior }) => Promise<boolean>;
+    scrollToMessage: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'nearest' }) => Promise<boolean>;
     handleHistoryScroll: () => void;
     captureViewportAnchor: () => ViewportAnchor | null;
     restoreViewportAnchor: (anchor: ViewportAnchor) => boolean;
@@ -347,7 +353,7 @@ export const useChatTimelineController = ({
 
         const didScroll = pending.kind === 'turn'
             ? (messageListRef.current?.scrollToTurnId(pending.id, { behavior: pending.behavior }) ?? false)
-            : (messageListRef.current?.scrollToMessageId(pending.id, { behavior: pending.behavior }) ?? false);
+            : (messageListRef.current?.scrollToMessageId(pending.id, { behavior: pending.behavior, align: pending.align }) ?? false);
 
         if (didScroll) {
             if (pending.turnId) {
@@ -736,6 +742,7 @@ export const useChatTimelineController = ({
                     kind: 'turn',
                     id: turnId,
                     behavior: options?.behavior ?? 'auto',
+                    align: 'top',
                     turnId,
                     resolve,
                 };
@@ -756,7 +763,7 @@ export const useChatTimelineController = ({
 
     const scrollToMessage = React.useCallback(async (
         messageId: string,
-        options?: { behavior?: ScrollBehavior },
+        options?: { behavior?: ScrollBehavior; align?: 'top' | 'nearest' },
     ): Promise<boolean> => {
         if (!messageId || !sessionIdRef.current || !timelineIdentityRef.current.key) {
             return false;
@@ -784,6 +791,7 @@ export const useChatTimelineController = ({
                     kind: 'message',
                     id: messageId,
                     behavior: options?.behavior ?? 'auto',
+                    align: options?.align ?? 'top',
                     turnId: turnId ?? null,
                     resolve,
                 };

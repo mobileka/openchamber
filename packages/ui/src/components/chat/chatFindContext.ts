@@ -9,7 +9,8 @@ import React from 'react';
 
 export type ChatFindApi = {
   isOpen: boolean;
-  hasSession: boolean;
+  /** A session with at least one message: there is something to search. */
+  canSearch: boolean;
   /** Open the bar, or re-focus its query when it is already open. */
   open: () => void;
 };

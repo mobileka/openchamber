@@ -33,6 +33,15 @@ Navigation calls `requestChatFindTurnReveal` / `requestChatFindPartReveal`:
 tool card or reasoning block. Requests survive until a consumer takes them, and
 part reveals notify only their message.
 
+Navigation asks the timeline for `align: 'nearest'`: enough to mount the row
+and release auto-follow, without the row-top settle that would fight the final
+position. `ChatFindHighlightLayer` then centers the match's own range, retries
+on later repaints when the row was not mounted yet, and keeps the range in
+sight through the reflows that follow (expanding parts, streaming, virtualizer
+measurement). The reader's own scroll ends that following until the next
+match. A session switch holds the centering off for the restored match, so the
+timeline's viewport restore stays in charge.
+
 ## Per-session state
 
 `useChatFindStore` owns two layers per session keyed by runtime + directory +

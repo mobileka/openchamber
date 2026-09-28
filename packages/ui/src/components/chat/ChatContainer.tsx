@@ -1013,7 +1013,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         setCurrentSession(parentSession.id, parentDirectory);
     }, [parentSession, setCurrentSession]);
 
-    const returnToParentButton = parentSession && !hideReturnToParent ? (
+    const showReturnToParent = Boolean(parentSession) && !hideReturnToParent;
+    const returnToParentButton = showReturnToParent && parentSession ? (
         <Button
             type="button"
             variant="outline"
@@ -1239,7 +1240,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         } else if (match.partId && match.kind === 'reasoning') {
             requestChatFindPartReveal(match.messageId, { kind: 'reasoning', partId: match.partId });
         }
-        void timelineController.scrollToMessage(match.messageId, { behavior: 'auto' });
+        // The highlight layer centers the match's own range; this call only
+        // makes sure the row is mounted and releases auto-follow, so it must
+        // not also settle the row top where the centering then fights it.
+        void timelineController.scrollToMessage(match.messageId, { behavior: 'auto', align: 'nearest' });
     }, [timelineController]);
 
     const chatFind = useChatFind({
@@ -1265,9 +1269,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
     }, []);
     const chatFindApi = React.useMemo<ChatFindApi>(() => ({
         isOpen: chatFind.isOpen,
-        hasSession: Boolean(currentSessionId),
+        canSearch: Boolean(currentSessionId) && sessionMessages.length > 0,
         open: openChatFind,
-    }), [chatFind.isOpen, currentSessionId, openChatFind]);
+    }), [chatFind.isOpen, currentSessionId, openChatFind, sessionMessages.length]);
 
     React.useEffect(() => {
         const element = chatFindScopeRef.current;
@@ -1718,6 +1722,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
 				isSearchingHistory={chatFind.isSearchingHistory}
 				hasHistoryError={chatFind.hasHistoryError}
 				focusNonce={chatFindFocusNonce}
+				className={showReturnToParent ? 'top-12' : undefined}
 				onChangeQuery={chatFind.setQuery}
 				onToggleSetting={chatFind.toggleSetting}
 				onNext={chatFind.goNext}

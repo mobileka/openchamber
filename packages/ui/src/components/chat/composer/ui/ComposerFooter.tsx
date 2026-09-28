@@ -165,12 +165,11 @@ export function ComposerFooter(props: ComposerFooterProps) {
                                 permissionAutoAcceptEnabled={permissionAutoAcceptEnabled}
                                 handlePermissionAutoAcceptToggle={onTogglePermissionAutoAccept}
                             />
-                            {chatFind ? (
+                            {chatFind?.canSearch ? (
                                 <button
                                     type="button"
                                     className={cn(footerIconButtonClass, chatFind.isOpen && 'text-foreground')}
                                     onClick={chatFind.open}
-                                    disabled={!chatFind.hasSession}
                                     title={t('chat.find.openAria')}
                                     aria-label={t('chat.find.openAria')}
                                     aria-pressed={chatFind.isOpen}
@@ -250,12 +249,11 @@ export function ComposerFooter(props: ComposerFooterProps) {
                             isExpandedInput={isExpandedInput}
                             onToggle={onToggleExpandedInput}
                         /> : null}
-                        {chatFind ? (
+                        {chatFind?.canSearch ? (
                             <button
                                 type="button"
                                 className={cn(footerIconButtonClass, chatFind.isOpen && 'text-foreground')}
                                 onClick={chatFind.open}
-                                disabled={!chatFind.hasSession}
                                 title={t('chat.find.openAria')}
                                 aria-label={t('chat.find.openAria')}
                                 aria-pressed={chatFind.isOpen}

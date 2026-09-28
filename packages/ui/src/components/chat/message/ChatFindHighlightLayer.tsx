@@ -8,6 +8,10 @@
  * layer it never touches the DOM, so it produces no mutations of its own and
  * needs no self-mutation filter.
  *
+ * Navigation scrolls the match's own range into the middle of the viewport
+ * (`scrollToMessage` only guarantees the row is mounted), and keeps it there
+ * across the reflows that follow until the reader takes over the scroll.
+ *
  * Highlight names are shared across columns (`oc-chat-find`,
  * `oc-chat-find-current`): only the focused column can own an open bar, so a
  * second column cannot paint over the first. Runtimes without
@@ -23,6 +27,10 @@ import type { ChatFindMatch } from '../lib/search/types';
 
 const SOFT_HIGHLIGHT = 'oc-chat-find';
 const CURRENT_HIGHLIGHT = 'oc-chat-find-current';
+
+/** Keep the match clear of the find bar and the composer's bottom edge. */
+const REVEAL_TOP_MARGIN_PX = 120;
+const REVEAL_BOTTOM_MARGIN_PX = 40;
 
 const supportsHighlights = (): boolean =>
   globalThis.Highlight !== undefined && globalThis.CSS !== undefined && 'highlights' in globalThis.CSS;
@@ -80,18 +88,73 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
     sessionId: null,
     key: null,
   });
+  /** True from a session switch until the reader picks a match themselves. */
+  const sessionHoldRef = React.useRef(false);
+  /** True once the reader scrolls the transcript, so find stops following. */
+  const userScrolledRef = React.useRef(false);
+
+  React.useEffect(() => {
+    const container = scrollNode;
+    if (!container) {
+      return;
+    }
+    const markUserScroll = (): void => {
+      userScrolledRef.current = true;
+    };
+    container.addEventListener('wheel', markUserScroll, { passive: true });
+    container.addEventListener('touchstart', markUserScroll, { passive: true });
+    container.addEventListener('pointerdown', markUserScroll, { passive: true });
+    return () => {
+      container.removeEventListener('wheel', markUserScroll);
+      container.removeEventListener('touchstart', markUserScroll);
+      container.removeEventListener('pointerdown', markUserScroll);
+    };
+  }, [scrollNode]);
 
   React.useEffect(() => {
     const container = scrollNode;
     if (!container || !isOpen || normalizedQuery.length === 0 || matchesByMessage.size === 0) {
       paint(SOFT_HIGHLIGHT, [], 0);
       paint(CURRENT_HIGHLIGHT, [], 1);
+      if (!isOpen) {
+        // Remember the session so the first query typed after opening can
+        // center its match, while a genuine session switch still holds off.
+        revealedRef.current = { sessionId, key: null };
+        sessionHoldRef.current = false;
+      }
       return;
     }
 
     const options: TextMatchOptions = { caseSensitive, wholeWord };
     const softRanges: Range[] = [];
     const currentRanges: Range[] = [];
+
+    const centerRange = (range: Range): void => {
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        return;
+      }
+      const containerRect = container.getBoundingClientRect();
+      const delta = rect.top - containerRect.top - (containerRect.height - rect.height) / 2;
+      if (Math.abs(delta) < 1) {
+        return;
+      }
+      container.scrollTop += delta;
+    };
+
+    // A match range can be taller than the viewport; the middle is what the
+    // reader is looking at, so it decides whether the range still counts as
+    // in sight.
+    const isRangeInSight = (range: Range): boolean => {
+      const rect = range.getBoundingClientRect();
+      if (rect.width === 0 && rect.height === 0) {
+        return false;
+      }
+      const containerRect = container.getBoundingClientRect();
+      const centerY = rect.top + rect.height / 2;
+      return centerY >= containerRect.top + REVEAL_TOP_MARGIN_PX
+        && centerY <= containerRect.bottom - REVEAL_BOTTOM_MARGIN_PX;
+    };
 
     const resolveCurrentRange = (
       messageElement: HTMLElement,
@@ -157,11 +220,39 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       paint(CURRENT_HIGHLIGHT, currentRanges, 1);
 
       const key = currentMatch?.key ?? null;
-      const sessionChanged = revealedRef.current.sessionId !== sessionId;
-      if (!sessionChanged && key && key !== revealedRef.current.key && currentRanges[0]) {
-        currentRanges[0].startContainer.parentElement?.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const range = currentRanges[0] ?? null;
+
+      if (revealedRef.current.sessionId !== sessionId) {
+        // A parked run restored after a session switch must not pull the
+        // viewport away from the reader's remembered position.
+        revealedRef.current = { sessionId, key };
+        sessionHoldRef.current = true;
+        userScrolledRef.current = false;
+        return;
       }
-      revealedRef.current = { sessionId, key };
+
+      if (!key || !range) {
+        return;
+      }
+      if (revealedRef.current.key !== key) {
+        // A new match is always centered, even when already on screen, so
+        // stepping reads as movement. It also ends any previous hold: the
+        // reader asked for this match.
+        revealedRef.current = { sessionId, key };
+        sessionHoldRef.current = false;
+        userScrolledRef.current = false;
+        centerRange(range);
+        return;
+      }
+      if (sessionHoldRef.current || userScrolledRef.current) {
+        return;
+      }
+      // Rows mount and reflow after navigation (a collapsed part expands, the
+      // virtualized list measures, streaming rewrites): keep the current
+      // match in sight until the reader scrolls away themselves.
+      if (!isRangeInSight(range)) {
+        centerRange(range);
+      }
     };
 
     let frame: number | null = null;
