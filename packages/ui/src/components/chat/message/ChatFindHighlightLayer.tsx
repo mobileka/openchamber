@@ -8,9 +8,11 @@
  * layer it never touches the DOM, so it produces no mutations of its own and
  * needs no self-mutation filter.
  *
- * Navigation scrolls the match's own range into the middle of the viewport
- * (`scrollToMessage` only guarantees the row is mounted), and keeps it there
- * across the reflows that follow until the reader takes over the scroll.
+ * This layer also owns the current match's position. Navigation only brings a
+ * missing row into the rendered window and releases auto-follow; the layer
+ * centers the match's own range and keeps re-centering through the mount and
+ * reflow that follow (a collapsed part expanding, virtualizer measurement,
+ * streaming), until the reader takes over the scroll.
  *
  * Highlight names are shared across columns (`oc-chat-find`,
  * `oc-chat-find-current`): only the focused column can own an open bar, so a
@@ -28,9 +30,20 @@ import type { ChatFindMatch } from '../lib/search/types';
 const SOFT_HIGHLIGHT = 'oc-chat-find';
 const CURRENT_HIGHLIGHT = 'oc-chat-find-current';
 
-/** Keep the match clear of the find bar and the composer's bottom edge. */
-const REVEAL_TOP_MARGIN_PX = 120;
-const REVEAL_BOTTOM_MARGIN_PX = 40;
+/**
+ * A navigation keeps re-centering for this many frames. Rows mount and reflow
+ * asynchronously (expansion, measurement), and none of that is guaranteed to
+ * announce itself with a DOM mutation.
+ */
+const REVEAL_SETTLE_FRAMES = 40;
+/** Consecutive frames a match must hold its centered position to count as settled. */
+const REVEAL_SETTLED_FRAMES = 3;
+const REVEAL_CENTER_TOLERANCE_PX = 8;
+/** Frames without a mounted row before asking the timeline to bring it in. */
+const REVEAL_MOUNT_RETRY_FRAMES = [6, 20] as const;
+/** A match counts as visible only between the find bar and the composer. */
+const REVEAL_VISIBLE_TOP_MARGIN_PX = 120;
+const REVEAL_VISIBLE_BOTTOM_MARGIN_PX = 140;
 
 const supportsHighlights = (): boolean =>
   globalThis.Highlight !== undefined && globalThis.CSS !== undefined && 'highlights' in globalThis.CSS;
@@ -58,6 +71,8 @@ type ChatFindHighlightLayerProps = {
   wholeWord: boolean;
   matches: ChatFindMatch[];
   currentMatch: ChatFindMatch | null;
+  /** Ask the timeline to mount a message that is not in the rendered window. */
+  onRequestMessageMount: (messageId: string) => void;
 };
 
 export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer({
@@ -69,6 +84,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
   wholeWord,
   matches,
   currentMatch,
+  onRequestMessageMount,
 }: ChatFindHighlightLayerProps) {
   const matchesByMessage = React.useMemo(() => {
     const byMessage = new Map<string, ChatFindMatch[]>();
@@ -129,6 +145,14 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
     const softRanges: Range[] = [];
     const currentRanges: Range[] = [];
 
+    const findMessageElement = (messageId: string): HTMLElement | null =>
+      container.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+
+    const resolveMessageRoot = (messageElement: HTMLElement, messageId: string): Element =>
+      messageElement.querySelector('[data-chat-quote-root]')
+        ?? findChatQuoteRoot(container, messageId)
+        ?? messageElement;
+
     const centerRange = (range: Range): void => {
       const rect = range.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) {
@@ -145,15 +169,28 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
     // A match range can be taller than the viewport; the middle is what the
     // reader is looking at, so it decides whether the range still counts as
     // in sight.
-    const isRangeInSight = (range: Range): boolean => {
+    const isRangeInBand = (range: Range): boolean => {
       const rect = range.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) {
         return false;
       }
       const containerRect = container.getBoundingClientRect();
       const centerY = rect.top + rect.height / 2;
-      return centerY >= containerRect.top + REVEAL_TOP_MARGIN_PX
-        && centerY <= containerRect.bottom - REVEAL_BOTTOM_MARGIN_PX;
+      return centerY >= containerRect.top + REVEAL_VISIBLE_TOP_MARGIN_PX
+        && centerY <= containerRect.bottom - REVEAL_VISIBLE_BOTTOM_MARGIN_PX;
+    };
+
+    // Fallback for a match whose text does not resolve in the DOM (markdown
+    // transforms it away): at least show the message that contains it.
+    const ensureMessageVisible = (messageElement: HTMLElement): void => {
+      const rect = messageElement.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+      const top = containerRect.top + REVEAL_VISIBLE_TOP_MARGIN_PX;
+      const bottom = containerRect.bottom - REVEAL_VISIBLE_BOTTOM_MARGIN_PX;
+      if (rect.top >= top && rect.bottom <= bottom) {
+        return;
+      }
+      container.scrollTop += rect.top - top;
     };
 
     const resolveCurrentRange = (
@@ -186,6 +223,111 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       return candidate ? rangeFromStreamOffsets(messageRoot, candidate.start, candidate.end) : null;
     };
 
+    // The reveal loop is the only thing that positions the viewport for the
+    // current match. It runs right after navigation and stops as soon as the
+    // match holds a stable position, the frame budget runs out, or the reader
+    // takes over the scroll.
+    let revealFrame: number | null = null;
+    let revealFrames = 0;
+    let revealSettled = 0;
+    let revealMissing = 0;
+    let mountRetries = 0;
+    let revealRange: Range | null = null;
+
+    const stopReveal = (): void => {
+      if (revealFrame !== null) {
+        window.cancelAnimationFrame(revealFrame);
+        revealFrame = null;
+      }
+    };
+
+    const stepReveal = (): void => {
+      revealFrame = null;
+      const match = currentMatch;
+      const key = match?.key ?? null;
+      if (!match || !key || userScrolledRef.current || sessionHoldRef.current) {
+        stopReveal();
+        return;
+      }
+      if (revealedRef.current.key === key) {
+        stopReveal();
+        return;
+      }
+
+      const messageElement = findMessageElement(match.messageId);
+      let range = revealRange;
+      if (range && !range.startContainer.isConnected) {
+        range = null;
+      }
+      if (!range && messageElement) {
+        range = resolveCurrentRange(messageElement, resolveMessageRoot(messageElement, match.messageId), match.messageId);
+        revealRange = range;
+      }
+
+      if (range) {
+        const rect = range.getBoundingClientRect();
+        if (rect.width === 0 && rect.height === 0) {
+          // Hidden content (a collapsed part): the reveal request will mount
+          // it, keep the loop alive for that. Until then, at least keep the
+          // message itself in sight.
+          revealRange = null;
+          revealSettled = 0;
+          if (messageElement) {
+            ensureMessageVisible(messageElement);
+          }
+        } else {
+          const containerRect = container.getBoundingClientRect();
+          const delta = rect.top - containerRect.top - (containerRect.height - rect.height) / 2;
+          if (Math.abs(delta) > REVEAL_CENTER_TOLERANCE_PX) {
+            container.scrollTop += delta;
+            revealSettled = 0;
+          } else {
+            revealSettled += 1;
+          }
+          if (revealSettled >= REVEAL_SETTLED_FRAMES) {
+            revealedRef.current = { sessionId, key };
+            stopReveal();
+            return;
+          }
+        }
+      } else if (messageElement) {
+        ensureMessageVisible(messageElement);
+        revealSettled += 1;
+        if (revealSettled >= REVEAL_SETTLED_FRAMES) {
+          revealedRef.current = { sessionId, key };
+          stopReveal();
+          return;
+        }
+      } else {
+        revealMissing += 1;
+        const retryAt = REVEAL_MOUNT_RETRY_FRAMES[mountRetries];
+        if (retryAt !== undefined && revealMissing >= retryAt) {
+          mountRetries += 1;
+          onRequestMessageMount(match.messageId);
+        }
+      }
+
+      revealFrames += 1;
+      if (revealFrames >= REVEAL_SETTLE_FRAMES) {
+        revealedRef.current = { sessionId, key };
+        stopReveal();
+        return;
+      }
+      revealFrame = window.requestAnimationFrame(stepReveal);
+    };
+
+    const startReveal = (): void => {
+      if (revealFrame !== null) {
+        return;
+      }
+      revealFrames = 0;
+      revealSettled = 0;
+      revealMissing = 0;
+      mountRetries = 0;
+      revealRange = null;
+      revealFrame = window.requestAnimationFrame(stepReveal);
+    };
+
     const repaint = (): void => {
       softRanges.length = 0;
       currentRanges.length = 0;
@@ -197,9 +339,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
         if (!messageId || !matchesByMessage.has(messageId)) {
           continue;
         }
-        const messageRoot = messageElement.querySelector('[data-chat-quote-root]')
-          ?? findChatQuoteRoot(container, messageId)
-          ?? messageElement;
+        const messageRoot = resolveMessageRoot(messageElement, messageId);
         const ranges = findTextMatches(messageRoot.textContent ?? '', normalizedQuery, options);
         for (const matchRange of ranges) {
           const range = rangeFromStreamOffsets(messageRoot, matchRange.start, matchRange.end);
@@ -220,37 +360,34 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       paint(CURRENT_HIGHLIGHT, currentRanges, 1);
 
       const key = currentMatch?.key ?? null;
-      const range = currentRanges[0] ?? null;
-
       if (revealedRef.current.sessionId !== sessionId) {
         // A parked run restored after a session switch must not pull the
         // viewport away from the reader's remembered position.
         revealedRef.current = { sessionId, key };
         sessionHoldRef.current = true;
         userScrolledRef.current = false;
+        stopReveal();
         return;
       }
-
-      if (!key || !range) {
+      if (!key) {
+        stopReveal();
         return;
       }
       if (revealedRef.current.key !== key) {
-        // A new match is always centered, even when already on screen, so
-        // stepping reads as movement. It also ends any previous hold: the
-        // reader asked for this match.
-        revealedRef.current = { sessionId, key };
+        // A new match always gets positioned, even when already on screen, so
+        // stepping reads as movement. It also ends any previous hold.
         sessionHoldRef.current = false;
         userScrolledRef.current = false;
-        centerRange(range);
+        startReveal();
         return;
       }
       if (sessionHoldRef.current || userScrolledRef.current) {
         return;
       }
-      // Rows mount and reflow after navigation (a collapsed part expands, the
-      // virtualized list measures, streaming rewrites): keep the current
-      // match in sight until the reader scrolls away themselves.
-      if (!isRangeInSight(range)) {
+      // Rows can reflow after the reveal settled (a collapsed part expands,
+      // streaming rewrites); keep the match in sight until the reader scrolls.
+      const range = currentRanges[0] ?? null;
+      if (range && !isRangeInBand(range)) {
         centerRange(range);
       }
     };
@@ -275,10 +412,21 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       if (frame !== null) {
         window.cancelAnimationFrame(frame);
       }
+      stopReveal();
       paint(SOFT_HIGHLIGHT, [], 0);
       paint(CURRENT_HIGHLIGHT, [], 1);
     };
-  }, [caseSensitive, currentMatch, isOpen, matchesByMessage, normalizedQuery, scrollNode, sessionId, wholeWord]);
+  }, [
+    caseSensitive,
+    currentMatch,
+    isOpen,
+    matchesByMessage,
+    normalizedQuery,
+    onRequestMessageMount,
+    scrollNode,
+    sessionId,
+    wholeWord,
+  ]);
 
   return null;
 });

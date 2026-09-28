@@ -149,7 +149,7 @@ interface MessageListProps {
 
 export interface MessageListHandle {
     scrollToTurnId: (turnId: string, options?: { behavior?: ScrollBehavior }) => boolean;
-    scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'nearest' }) => boolean;
+    scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' }) => boolean;
     captureViewportAnchor: () => { messageId: string; offsetTop: number } | null;
     restoreViewportAnchor: (anchor: { messageId: string; offsetTop: number }) => boolean;
     holdViewportAnchor: (anchor: { messageId: string; offsetTop: number }) => void;
@@ -1470,26 +1470,22 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                 return true;
             },
 
-            scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'nearest' }) => {
+            scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' }) => {
                 const behavior = options?.behavior ?? 'auto';
                 const index = messageIndexMap.get(messageId);
                 if (index === undefined) {
                     return false;
                 }
 
-                // Find navigation positions the match range itself, so a
-                // mounted target is left alone unless it sits outside the
-                // viewport, and no row-top settle runs to fight the centering.
-                if (options?.align === 'nearest') {
+                // Find navigation positions the match range itself: a mounted
+                // target is left exactly where it is (moving the message top
+                // would push a deep match out of view), and only a target
+                // outside the rendered window is teleported in.
+                if (options?.align === 'keep') {
                     const container = resolveScrollContainer();
                     const messageElement = container ? findMessageElement(messageId) : null;
-                    if (container && messageElement) {
-                        const containerRect = container.getBoundingClientRect();
-                        const messageRect = messageElement.getBoundingClientRect();
-                        if (messageRect.top >= containerRect.top && messageRect.bottom <= containerRect.bottom) {
-                            return true;
-                        }
-                        return scrollMessageElementIntoView(messageId, behavior);
+                    if (messageElement) {
+                        return true;
                     }
                     return scrollHistoryIndexIntoView(index);
                 }

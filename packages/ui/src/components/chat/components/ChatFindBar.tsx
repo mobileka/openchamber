@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Icon } from '@/components/icon/Icon';
 import { Input } from '@/components/ui/input';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { ChatFindSettings } from '@/stores/useChatFindStore';
@@ -131,6 +132,18 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
 
   const countLabel = matchCount > 0 ? `${currentIndex + 1}/${matchCount}` : '';
 
+  const wholeHistoryLabel = (
+    <label className={cn(OPTION_LABEL_CLASS, historyComplete && 'cursor-not-allowed opacity-60')}>
+      <Checkbox
+        checked={settings.includeWholeHistory}
+        disabled={historyComplete}
+        onChange={() => onToggleSetting('includeWholeHistory')}
+        ariaLabel={t('chat.find.includeWholeHistory')}
+      />
+      {t('chat.find.includeWholeHistory')}
+    </label>
+  );
+
   return (
     <div
       role="search"
@@ -239,18 +252,16 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
           />
           {t('chat.find.includeTools')}
         </label>
-        <label className={cn(OPTION_LABEL_CLASS, historyComplete && 'cursor-not-allowed opacity-60')}>
-          <Checkbox
-            checked={settings.includeWholeHistory}
-            disabled={historyComplete}
-            onChange={() => onToggleSetting('includeWholeHistory')}
-            ariaLabel={t('chat.find.includeWholeHistory')}
-          />
-          {t('chat.find.includeWholeHistory')}
-        </label>
         {historyComplete ? (
-          <span className="typography-micro text-muted-foreground/70">{t('chat.find.historyComplete')}</span>
-        ) : null}
+          <Tooltip>
+            <TooltipTrigger asChild>{wholeHistoryLabel}</TooltipTrigger>
+            <TooltipContent side="top" sideOffset={8}>
+              {t('chat.find.historyComplete')}
+            </TooltipContent>
+          </Tooltip>
+        ) : (
+          wholeHistoryLabel
+        )}
       </div>
 
       {hasHistoryError ? (

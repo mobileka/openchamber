@@ -20,11 +20,11 @@ type PendingScrollRequest = {
     id: string;
     behavior: ScrollBehavior;
     /**
-     * `nearest` keeps a mounted target where it is unless it sits fully
-     * outside the viewport: the caller (find navigation) positions the match
-     * itself and must not have a row-top settle drag it away.
+     * `keep` leaves a mounted target untouched: the caller (find navigation)
+     * positions the match itself and must not have a row-top scroll drag it
+     * away. An unmounted target is still teleported into the rendered window.
      */
-    align: 'top' | 'nearest';
+    align: 'top' | 'keep';
     turnId: string | null;
     resolve: (value: boolean) => void;
 };
@@ -58,7 +58,7 @@ export interface UseChatTimelineControllerResult {
     resumeToBottom: () => void;
     resumeToBottomInstant: () => Promise<void>;
     scrollToTurn: (turnId: string, options?: { behavior?: ScrollBehavior }) => Promise<boolean>;
-    scrollToMessage: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'nearest' }) => Promise<boolean>;
+    scrollToMessage: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' }) => Promise<boolean>;
     handleHistoryScroll: () => void;
     captureViewportAnchor: () => ViewportAnchor | null;
     restoreViewportAnchor: (anchor: ViewportAnchor) => boolean;
@@ -374,7 +374,10 @@ export const useChatTimelineController = ({
             ? turnModelRef.current.turnIndexById.get(pending.id)
             : turnModelRef.current.messageToTurnIndex.get(pending.id);
 
-        if (typeof targetIndex === 'number') {
+        // The message list owns message scrolling: when it cannot act on the
+        // request, the request is terminal, whether or not the turn model
+        // knows the id. Find navigation runs its own mount retries.
+        if (targetIndex !== undefined || pending.kind === 'message') {
             resolvePendingScrollRequest(false);
         }
     }, [messageListRef, resolvePendingScrollRequest]);
@@ -763,7 +766,7 @@ export const useChatTimelineController = ({
 
     const scrollToMessage = React.useCallback(async (
         messageId: string,
-        options?: { behavior?: ScrollBehavior; align?: 'top' | 'nearest' },
+        options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' },
     ): Promise<boolean> => {
         if (!messageId || !sessionIdRef.current || !timelineIdentityRef.current.key) {
             return false;
@@ -779,11 +782,12 @@ export const useChatTimelineController = ({
             }
 
             const turnId = turnModelRef.current.messageToTurnId.get(messageId);
-            const turnIndex = turnModelRef.current.messageToTurnIndex.get(messageId);
 
-            if (typeof turnIndex !== 'number') {
-                return false;
-            }
+            // The turn window model only maps messages it can attribute to a
+            // turn; v2 assistant replies carry no parent, so they are absent
+            // from it. The message list owns the display index for every
+            // rendered message and can scroll it anyway, and the turn id only
+            // pins the rail indicator, so it must not gate the scroll.
 
             const result = await new Promise<boolean>((resolve) => {
                 pendingScrollRequestRef.current = {

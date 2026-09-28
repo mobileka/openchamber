@@ -1240,11 +1240,19 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         } else if (match.partId && match.kind === 'reasoning') {
             requestChatFindPartReveal(match.messageId, { kind: 'reasoning', partId: match.partId });
         }
-        // The highlight layer centers the match's own range; this call only
-        // makes sure the row is mounted and releases auto-follow, so it must
-        // not also settle the row top where the centering then fights it.
-        void timelineController.scrollToMessage(match.messageId, { behavior: 'auto', align: 'nearest' });
+        // The highlight layer centers the match's own range and keeps it in
+        // view; this call only mounts a row that is outside the rendered
+        // window and releases auto-follow, so it must not move a mounted row.
+        void timelineController.scrollToMessage(match.messageId, { behavior: 'auto', align: 'keep' });
     }, [timelineController]);
+
+    // The layer retries while a target row mounts; keep the callback stable so
+    // it never restarts the layer's reveal effect.
+    const scrollToMessageRef = React.useRef(timelineController.scrollToMessage);
+    scrollToMessageRef.current = timelineController.scrollToMessage;
+    const mountChatFindMessage = React.useCallback((messageId: string) => {
+        void scrollToMessageRef.current(messageId, { behavior: 'auto', align: 'keep' });
+    }, []);
 
     const chatFind = useChatFind({
         sessionId: currentSessionId,
@@ -1707,6 +1715,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
 			wholeWord={chatFind.settings.wholeWord}
 			matches={chatFind.matches}
 			currentMatch={chatFind.currentMatch}
+			onRequestMessageMount={mountChatFindMessage}
 		/>
 		<ChatFindContext.Provider value={chatFindApi}>
 		<div ref={chatFindScopeRef} data-chat-find-scope="" data-composer-bound className="relative flex min-w-0 flex-1 flex-col h-full bg-background">

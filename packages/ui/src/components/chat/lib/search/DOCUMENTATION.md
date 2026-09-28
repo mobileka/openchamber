@@ -33,14 +33,21 @@ Navigation calls `requestChatFindTurnReveal` / `requestChatFindPartReveal`:
 tool card or reasoning block. Requests survive until a consumer takes them, and
 part reveals notify only their message.
 
-Navigation asks the timeline for `align: 'nearest'`: enough to mount the row
-and release auto-follow, without the row-top settle that would fight the final
-position. `ChatFindHighlightLayer` then centers the match's own range, retries
-on later repaints when the row was not mounted yet, and keeps the range in
-sight through the reflows that follow (expanding parts, streaming, virtualizer
-measurement). The reader's own scroll ends that following until the next
-match. A session switch holds the centering off for the restored match, so the
-timeline's viewport restore stays in charge.
+Navigation asks the timeline for `align: 'keep'`: it only mounts a row that is
+outside the rendered window and releases auto-follow, never moving a mounted
+row. The message list owns the display index for every rendered message — v2
+assistant replies included, which the turn window model deliberately leaves
+unmapped — so the scroll is never gated on a message having a turn; the turn
+id only pins the rail indicator. `ChatFindHighlightLayer` owns the final
+position: on every new match it centers the match's own range in a bounded
+frame loop, retries while a collapsed part expands or a row mounts (asking the
+timeline to mount the row again if it stays out of the window), and keeps the
+range between the find bar and the composer through the reflows that follow
+(streaming, virtualizer measurement). If a counted match never resolves to a
+rendered range, the layer falls back to bringing its message into view. The
+reader's own scroll ends that following until the next match. A session switch
+holds the centering off for the restored match, so the timeline's viewport
+restore stays in charge.
 
 ## Per-session state
 
@@ -51,7 +58,8 @@ session:
   reopen, never shared between sessions;
 - **run** — query, current match, whole-history error; `null` when the bar is
   closed, parked and restored when the reader switches sessions with the bar
-  open.
+  open. An empty message list is a load state, not a no-match result: the
+  parked current match survives it and is re-resolved once messages return.
 
 Returning to a session must not move the viewport: both the controller and the
 highlight layer skip the reveal/scroll for the first selection after a session

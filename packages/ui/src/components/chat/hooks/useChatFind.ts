@@ -169,9 +169,9 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
       return;
     }
     if (matches.length === 0) {
-      if (current.currentKey !== null || current.currentIndex !== 0) {
-        updateRun({ currentKey: null, currentIndex: 0 });
-      }
+      // An empty list is a load state, not a result: switching back to a
+      // session empties its messages for a beat, and the parked selection must
+      // survive that instead of resetting to the first match.
       return;
     }
     if (current.currentKey) {
