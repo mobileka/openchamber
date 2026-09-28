@@ -228,6 +228,8 @@ interface MessageBodyProps {
     onCopyCode: (code: string) => void;
     expandedTools: Set<string>;
     onToggleTool: (toolId: string) => void;
+    /** Reasoning parts find navigation asked to expand (keyed by part id). */
+    revealedPartIds?: Set<string>;
     onShowPopup: (content: ToolPopupContent) => void;
     streamPhase: StreamPhase;
     allowAnimation: boolean;
@@ -1058,6 +1060,7 @@ const AssistantMessageBody = React.memo(({
     hasTouchInput,
     expandedTools,
     onToggleTool,
+    revealedPartIds,
     onShowPopup,
     streamPhase: _streamPhase,
     allowAnimation: _allowAnimation,
@@ -1865,6 +1868,7 @@ const AssistantMessageBody = React.memo(({
                                 part={part}
                                 messageId={messageId}
                                 streamPhase={effectiveStreamPhase}
+                                revealRequested={revealedPartIds?.has(part.id) ?? false}
                             />
                         );
                     }
@@ -1993,6 +1997,7 @@ const AssistantMessageBody = React.memo(({
         sessionId,
         onShowPopup,
         onToggleTool,
+        revealedPartIds,
         shouldRenderActivityGroup,
         shouldShowStandaloneMessageActions,
         shouldShowTool,

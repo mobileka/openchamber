@@ -25,6 +25,11 @@ import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useSessionPartsForMessages } from '@/sync/sync-context';
 import type { ReviewTransferDirection } from '@/lib/reviewFlow';
 import { resolveTimelineIsAtEnd } from './lib/scroll/timelineScrollAnchoring';
+import {
+    getChatFindTurnRevealVersion,
+    subscribeChatFindTurnReveals,
+    takeChatFindTurnReveals,
+} from './lib/chatFindReveal';
 
 const EMPTY_STATIC_ENTRY_MESSAGES: ChatMessageEntry[] = [];
 const EMPTY_UNGROUPED_MESSAGE_IDS = new Set<string>();
@@ -1034,6 +1039,27 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
     React.useEffect(() => {
         setTurnUiStates(new Map());
     }, [activityRenderMode, sessionKey]);
+
+    // Find navigation into collapsed activity expands the owning turn.
+    const findTurnRevealVersion = React.useSyncExternalStore(
+        subscribeChatFindTurnReveals,
+        getChatFindTurnRevealVersion,
+        () => 0,
+    );
+    React.useEffect(() => {
+        const revealedTurnIds = takeChatFindTurnReveals();
+        if (revealedTurnIds.length === 0) {
+            return;
+        }
+        setTurnUiStates((previous) => {
+            const next = new Map(previous);
+            for (const turnId of revealedTurnIds) {
+                const current = next.get(turnId) ?? { isExpanded: defaultActivityExpanded };
+                next.set(turnId, { ...current, isExpanded: true });
+            }
+            return next;
+        });
+    }, [defaultActivityExpanded, findTurnRevealVersion]);
 
     const toggleTurnGroup = React.useCallback((turnId: string, mode: 'sorted' | 'live' = 'sorted') => {
         setTurnUiStates((previous) => {

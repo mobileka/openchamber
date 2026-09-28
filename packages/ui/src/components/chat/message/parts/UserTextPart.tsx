@@ -247,11 +247,13 @@ const UserTextPart: React.FC<UserTextPartProps> = ({ part, messageId, agentMenti
 
     if (contextPayload) {
         return (
-            <UserContextPart
-                payload={contextPayload}
-                collapsed={isCollapsed}
-                onExpand={isControlled ? onExpandMessage : () => setIsExpanded(true)}
-            />
+            <div data-part-id={part.id}>
+                <UserContextPart
+                    payload={contextPayload}
+                    collapsed={isCollapsed}
+                    onExpand={isControlled ? onExpandMessage : () => setIsExpanded(true)}
+                />
+            </div>
         );
     }
 
@@ -260,7 +262,7 @@ const UserTextPart: React.FC<UserTextPartProps> = ({ part, messageId, agentMenti
     }
 
     return (
-        <div className="relative" key={part.id || `${messageId}-user-text`}>
+        <div className="relative" key={part.id || `${messageId}-user-text`} data-part-id={part.id}>
             {collapsibleUserMessages && !isControlled && isExpanded && (
                 <button
                     type="button"

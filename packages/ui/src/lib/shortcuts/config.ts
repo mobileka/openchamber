@@ -232,7 +232,11 @@ const SHORTCUT_GROUPS = {
   ],
   navigation: [
     { id: 'save_file', defaultBinding: 'mod+s', customizable: false },
+    // File find and chat find intentionally share mod+f: the two surfaces are
+    // never focused at once, and each handler yields when the event target is
+    // outside its own scope (see `resolveChatFindOwner`).
     { id: 'find_in_file', defaultBinding: 'mod+f', customizable: false },
+    { id: 'find_in_chat', defaultBinding: 'mod+f', customizable: false },
     {
       id: 'open_go_to_line',
       defaultBinding: 'alt+g',

@@ -103,6 +103,16 @@ button,
   background-color: var(--oc-text-selection);
 }
 
+/* Chat find: every match tinted like a text selection, the current one
+   stronger so stepping reads as movement. */
+::highlight(oc-chat-find) {
+  background-color: var(--oc-text-selection);
+}
+
+::highlight(oc-chat-find-current) {
+  background-color: color-mix(in srgb, var(--status-warning) 55%, transparent);
+}
+
 .pierre-diff-wrapper {
   --diffs-bg-selection-override: var(--interactive-selection);
   --diffs-bg-selection-background-override: var(--interactive-selection);

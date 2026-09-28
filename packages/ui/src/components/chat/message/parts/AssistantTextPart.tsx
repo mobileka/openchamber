@@ -79,6 +79,7 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
             <div
                 className={`group/assistant-text relative break-words ${chatRenderMode === 'live' ? 'my-1' : ''}`}
                 key={part.id || `${messageId}-text`}
+                data-part-id={part.id}
             >
                 <GeneratedJsonResultCard result={generatedResult} />
             </div>
@@ -89,6 +90,7 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
         <div
             className={`group/assistant-text relative break-words ${chatRenderMode === 'live' ? 'my-1' : ''}`}
             key={part.id || `${messageId}-text`}
+            data-part-id={part.id}
         >
             <MarkdownRenderer
                 content={displayTextContent}

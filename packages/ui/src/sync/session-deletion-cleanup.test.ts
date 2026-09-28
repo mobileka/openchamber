@@ -8,6 +8,7 @@ import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
 import { useInlineCommentDraftStore } from '@/stores/useInlineCommentDraftStore';
 import { isSessionPinned, useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore';
+import { getChatFindSessionKey, useChatFindStore } from '@/stores/useChatFindStore';
 import { cleanupPersistedSessionState } from './session-deletion-cleanup';
 
 describe('cleanupPersistedSessionState', () => {
@@ -18,6 +19,7 @@ describe('cleanupPersistedSessionState', () => {
     useSessionFoldersStore.setState({ foldersMap: {}, collapsedFolderIds: new Set() });
     useInputHistoryStore.setState({ globalBuckets: {}, sessionBuckets: {}, scope: 'session' });
     useSessionMultiSelectStore.getState().disable();
+    useChatFindStore.setState({ entries: {} });
   });
 
   test('clears persisted session state only for the deleted composite session', () => {
@@ -79,6 +81,20 @@ describe('cleanupPersistedSessionState', () => {
 
     expect(isSessionPinned(useSessionPinnedStore.getState().ids, '/repo', 'session-1')).toBe(true);
     expect(useSessionMultiSelectStore.getState().selectedIds.has('session-1')).toBe(true);
+  });
+
+  test('clears chat find state only for the deleted composite session', () => {
+    const runtimeKey = getRuntimeKey();
+    useChatFindStore.getState().openSession(runtimeKey, '/repo-a', 'session-1');
+    useChatFindStore.getState().openSession(runtimeKey, '/repo-b', 'session-1');
+    const deletedKey = getChatFindSessionKey(runtimeKey, '/repo-a', 'session-1');
+    const retainedKey = getChatFindSessionKey(runtimeKey, '/repo-b', 'session-1');
+    if (!deletedKey || !retainedKey) throw new Error('chat find identity missing');
+
+    cleanupPersistedSessionState({ runtimeKey, directory: '/repo-a', sessionId: 'session-1' });
+
+    expect(useChatFindStore.getState().entries[deletedKey]).toBeUndefined();
+    expect(useChatFindStore.getState().entries[retainedKey]).toBeDefined();
   });
 
   test('removes only the deleted session input-history bucket', () => {

@@ -33,6 +33,7 @@ import { getBtwOriginalSessionID, getBtwSessionID, isBtwSession, withoutBtwSessi
 import { withLinkedIssue, type LinkedIssue } from "@/lib/linkedIssues"
 import { getImperativeSessionMessageLoader } from "./session-message-loader"
 import { cleanupPersistedSessionState } from "./session-deletion-cleanup"
+import { clearChatFindSessionState } from "@/stores/useChatFindStore"
 import { requestSessionArchiveBatch, requestSessionMetadataUpdate, requestSessionUnarchiveBatch, type SessionArchiveStamp } from "./session-archive-batch"
 import { registerBulkArchiveEchoes, releaseBulkArchiveEchoes } from "./bulk-archive-echo"
 import { getRuntimeKey } from "@/lib/runtime-switch"
@@ -1410,6 +1411,7 @@ export async function archiveSession(sessionId: string, expectedRuntimeKey = get
     const snapshots = removeSessionFromLiveStores(sessionId, sessionDirectory)
     invalidateSessionLoads(sessionId, [...snapshots.map((snapshot) => snapshot.directory), sessionDirectory])
     if (archived) useGlobalSessionsStore.getState().upsertSession(archived)
+    clearChatFindSessionState(expectedRuntimeKey, sessionDirectory, sessionId)
     const ui = useSessionUIStore.getState()
     if (ui.currentSessionId === sessionId) ui.setCurrentSession(null)
     return true
@@ -1579,6 +1581,8 @@ function commitArchivedSessions(stamps: SessionArchiveStamp[], directory: string
   for (const id of ids) invalidateSessionLoads(id, directories)
 
   useGlobalSessionsStore.getState().upsertSessions(archived)
+  const runtimeKey = getRuntimeKey()
+  for (const id of ids) clearChatFindSessionState(runtimeKey, directory, id)
 
   const ui = useSessionUIStore.getState()
   if (ui.currentSessionId && ids.includes(ui.currentSessionId)) ui.setCurrentSession(null)

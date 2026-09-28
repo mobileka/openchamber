@@ -42,6 +42,13 @@ import { SessionRecapNote } from '@/components/chat/SessionRecapSpacer';
 import { SessionErrorNotice } from '@/components/chat/SessionErrorNotice';
 import ScrollToBottomButton from './components/ScrollToBottomButton';
 import { PromptNavigatorRail } from './components/PromptNavigatorRail';
+import { ChatFindBar } from './components/ChatFindBar';
+import { ChatFindHighlightLayer } from './message/ChatFindHighlightLayer';
+import { useChatFind } from './hooks/useChatFind';
+import { ChatFindContext, type ChatFindApi } from './chatFindContext';
+import { requestChatFindPartReveal, requestChatFindTurnReveal } from './lib/chatFindReveal';
+import type { ChatFindMatch } from './lib/search/types';
+import { registerChatFindOwner } from '@/lib/chatFindOwnership';
 import { useAuthSessionStore } from '@/lib/runtime-auth-expiry';
 import { useScrollShadow } from '@/components/ui/useScrollShadow';
 import { useChatTimelineScroll, type TimelineListHandle } from '@/hooks/useChatTimelineScroll';
@@ -783,6 +790,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
     // UI store
     const isExpandedInput = useUIStore((state) => state.isExpandedInput);
     const stickyUserHeader = useUIStore((state) => state.stickyUserHeader);
+    const showReasoningTraces = useUIStore((state) => state.showReasoningTraces);
     const promptNavigatorEnabled = useUIStore((state) => state.promptNavigatorEnabled);
     const allowPromptingSubagentSessions = useUIStore((state) => state.allowPromptingSubagentSessions);
     const [embeddedAllowPrompting, setEmbeddedAllowPrompting] = React.useState(initialAllowPromptingSubagentSessions);
@@ -1207,6 +1215,75 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         && promptNavigatorEnabled
         && timelineController.turnIds.length >= 2;
 
+    // --- In-chat find ----------------------------------------------------
+    const chatFindScopeRef = React.useRef<HTMLDivElement | null>(null);
+    const chatFindColumnId = React.useId();
+    const [chatFindFocusNonce, setChatFindFocusNonce] = React.useState(0);
+
+    const messageToTurnIndex = timelineController.turnWindowModel.messageToTurnIndex;
+    const activeTurnIndex = React.useMemo(() => {
+        if (!timelineController.activeTurnId) {
+            return -1;
+        }
+        return timelineController.turnIds.indexOf(timelineController.activeTurnId);
+    }, [timelineController.activeTurnId, timelineController.turnIds]);
+
+    const revealChatFindMatch = React.useCallback((match: ChatFindMatch) => {
+        const turnIndex = timelineController.turnWindowModel.messageToTurnIndex.get(match.messageId);
+        const turnId = turnIndex !== undefined ? timelineController.turnIds[turnIndex] : undefined;
+        if (turnId) {
+            requestChatFindTurnReveal(turnId);
+        }
+        if (match.partId && match.kind === 'tool') {
+            requestChatFindPartReveal(match.messageId, { kind: 'tool', partId: match.partId });
+        } else if (match.partId && match.kind === 'reasoning') {
+            requestChatFindPartReveal(match.messageId, { kind: 'reasoning', partId: match.partId });
+        }
+        void timelineController.scrollToMessage(match.messageId, { behavior: 'auto' });
+    }, [timelineController]);
+
+    const chatFind = useChatFind({
+        sessionId: currentSessionId,
+        directory: effectiveSessionDirectory,
+        messages: sessionMessages,
+        messageToTurnIndex,
+        activeTurnIndex,
+        historyComplete: sessionMessageLoadState.complete,
+        messageLoader,
+        reasoningVisible: showReasoningTraces,
+        revealMatch: revealChatFindMatch,
+    });
+    const chatFindRef = React.useRef(chatFind);
+    chatFindRef.current = chatFind;
+    const openChatFind = React.useCallback(() => {
+        const controller = chatFindRef.current;
+        if (controller.isOpen) {
+            setChatFindFocusNonce((nonce) => nonce + 1);
+            return;
+        }
+        controller.open();
+    }, []);
+    const chatFindApi = React.useMemo<ChatFindApi>(() => ({
+        isOpen: chatFind.isOpen,
+        hasSession: Boolean(currentSessionId),
+        open: openChatFind,
+    }), [chatFind.isOpen, currentSessionId, openChatFind]);
+
+    React.useEffect(() => {
+        const element = chatFindScopeRef.current;
+        if (!element) {
+            return;
+        }
+        return registerChatFindOwner({
+            id: chatFindColumnId,
+            element,
+            isActive: () => Boolean(active && currentSessionId),
+            isOpen: () => chatFindRef.current.isOpen,
+            open: openChatFind,
+            closeActive: () => chatFindRef.current.close(),
+        });
+    }, [active, chatFindColumnId, currentSessionId, openChatFind]);
+
     React.useEffect(() => {
         if (!showPromptNavigator) {
             useUIStore.getState().setPromptNavigatorPanelOpen(false);
@@ -1617,8 +1694,37 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
 			scrollNode={scrollNode}
 			scrollToMessage={timelineController.scrollToMessage}
 		/>
-		<div data-composer-bound className="relative flex min-w-0 flex-1 flex-col h-full bg-background">
+		<ChatFindHighlightLayer
+			scrollNode={scrollNode}
+			sessionId={currentSessionId}
+			isOpen={chatFind.isOpen}
+			query={chatFind.query}
+			caseSensitive={chatFind.settings.caseSensitive}
+			wholeWord={chatFind.settings.wholeWord}
+			matches={chatFind.matches}
+			currentMatch={chatFind.currentMatch}
+		/>
+		<ChatFindContext.Provider value={chatFindApi}>
+		<div ref={chatFindScopeRef} data-chat-find-scope="" data-composer-bound className="relative flex min-w-0 flex-1 flex-col h-full bg-background">
 			{returnToParentButton}
+			<ChatFindBar
+				open={chatFind.isOpen}
+				query={chatFind.query}
+				settings={chatFind.settings}
+				matchCount={chatFind.matches.length}
+				currentIndex={chatFind.currentIndex}
+				reasoningVisible={showReasoningTraces}
+				historyComplete={chatFind.historyComplete}
+				isSearchingHistory={chatFind.isSearchingHistory}
+				hasHistoryError={chatFind.hasHistoryError}
+				focusNonce={chatFindFocusNonce}
+				onChangeQuery={chatFind.setQuery}
+				onToggleSetting={chatFind.toggleSetting}
+				onNext={chatFind.goNext}
+				onPrevious={chatFind.goPrevious}
+				onClose={chatFind.close}
+				onRetryHistory={chatFind.retryHistory}
+			/>
 			{sessionSurface}
 
             <div
@@ -1737,6 +1843,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
                 onLoadEarlier={handleLoadOlderClick}
             />
         </div>
+        </ChatFindContext.Provider>
         </ChatQuoteHighlightContext.Provider>
         </MobileCommentComposerContext.Provider>
         </ChatColumnSessionContext.Provider>

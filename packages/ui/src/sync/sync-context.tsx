@@ -72,6 +72,7 @@ import { useConfigStore } from "@/stores/useConfigStore"
 import { refreshStoresForCatalogKind } from "@/stores/catalogRefresh"
 import { resolveGlobalSessionDirectory, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
 import { cleanupPersistedSessionState } from "./session-deletion-cleanup"
+import { clearChatFindSessionState } from "@/stores/useChatFindStore"
 import { toast } from "@/components/ui"
 import { appendNotification } from "./notification-store"
 import { recordSessionError, summarizeOpenCodeError } from "./session-error-log"
@@ -1994,6 +1995,9 @@ export function handleEvent(
       && Boolean(payload.properties.patch.time?.archived)
     if (sessionID && (payload.type === "session.deleted" || archived)) {
       getImperativeSessionMessageLoader()?.invalidateSession({ directory: resolvedDirectory, sessionID })
+    }
+    if (sessionID && archived) {
+      clearChatFindSessionState(getRuntimeKey(), resolvedDirectory, sessionID)
     }
     syncDebug.dispatch.eventApplied(payload.type, sessionID, messageID)
 

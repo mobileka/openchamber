@@ -88,6 +88,8 @@ type ReasoningTimelineBlockProps = {
     actions?: React.ReactNode;
     /** Override the initial expanded state. Defaults to `isStreaming`. */
     defaultExpanded?: boolean;
+    /** Find navigation asked for this block; expand it as a user action. */
+    revealRequested?: boolean;
 };
 
 type ExpansionState = {
@@ -103,6 +105,7 @@ export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
     isStreaming = false,
     actions,
     defaultExpanded,
+    revealRequested = false,
 }) => {
     const { t } = useI18n();
     const hasEnded = typeof time?.end === 'number';
@@ -117,6 +120,17 @@ export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
         ? canAutoExpand && expansion.expanded
         : expansion.expanded;
     const [shouldRenderExpandedContent, setShouldRenderExpandedContent] = React.useState(defaultExpanded === true || canAutoExpand);
+
+    // A find match inside this block expands it; the state is kept as a user
+    // action so it survives streaming updates.
+    React.useEffect(() => {
+        if (!revealRequested) {
+            return;
+        }
+        setShouldRenderExpandedContent(true);
+        setExpansion({ expanded: true, source: 'user' });
+    }, [revealRequested]);
+
     const contentId = React.useId();
     const contentRef = React.useRef<HTMLDivElement>(null);
     const contentAnimationRef = React.useRef<AnimationPlaybackControls | null>(null);
@@ -354,7 +368,7 @@ export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
     );
 
     return (
-        <div data-reasoning-block-id={blockId} data-message-text-export-root="true">
+        <div data-reasoning-block-id={blockId} data-part-id={blockId} data-message-text-export-root="true">
             <div
                 role="button"
                 tabIndex={0}
@@ -479,12 +493,15 @@ type ReasoningPartProps = {
     part: Part;
     messageId: string;
     streamPhase?: StreamPhase;
+    /** Find navigation asked for this block; expands it when it mounts. */
+    revealRequested?: boolean;
 };
 
 const ReasoningPart = React.memo(({
     part,
     messageId,
     streamPhase,
+    revealRequested = false,
 }: ReasoningPartProps) => {
     const chatRenderMode = useUIStore((state) => state.chatRenderMode);
     const partWithText = part as PartWithText;
@@ -521,6 +538,7 @@ const ReasoningPart = React.memo(({
             blockId={part.id || `${messageId}-reasoning`}
             time={time}
             isStreaming={isStreaming}
+            revealRequested={revealRequested}
         />
     );
 });

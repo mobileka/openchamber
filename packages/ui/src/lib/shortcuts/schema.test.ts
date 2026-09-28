@@ -160,7 +160,12 @@ describe('shortcut defaults', () => {
     // (registry insertion order decides). Pairs that intentionally share a
     // combo because they can never be active in the same runtime must be
     // whitelisted here explicitly.
-    const RUNTIME_EXCLUSIVE_BINDING_PAIRS: ReadonlyArray<ReadonlySet<string>> = [];
+    const RUNTIME_EXCLUSIVE_BINDING_PAIRS: ReadonlyArray<ReadonlySet<string>> = [
+        // File find and chat find share mod+f. They are contextual, not
+        // runtime-exclusive: the focused surface decides, and each handler
+        // returns false outside its own scope.
+        new Set(['find_in_file', 'find_in_chat']),
+    ];
 
     test('no two actions share a normalized default binding', () => {
         const byBinding = new Map<string, string[]>();

@@ -20,6 +20,7 @@ import type {
   GitWorktreeValidationResult,
 } from '@/lib/api/types';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { clearChatFindDirectoryState } from '@/stores/useChatFindStore';
 import { useSessionWorktreeStore } from '@/sync/session-worktree-store';
 
 type WorktreeListEntry = {
@@ -730,6 +731,8 @@ export async function removeProjectWorktree(project: ProjectRef, worktree: Workt
   }
 
   clearWorktreeBootstrapState(worktree.path);
+
+  clearChatFindDirectoryState(worktree.path);
 
   invalidateWorktreeList(normalizePath(project.path));
   // Removing a worktree changes the repo's worktree topology; drop cached root
