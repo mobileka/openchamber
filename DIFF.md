@@ -55,3 +55,67 @@ How to use it at merge time:
 - `packages/ui/src/lib/agentLabel.test.ts`: display name, blank fallback, multi-word and hyphenated ids.
 - `packages/ui/src/components/chat/mobileControlsUtils.test.ts`: Plan/Build cycle, single-candidate rule, display capitalization.
 - `packages/ui/src/lib/shortcuts/schema.test.ts`: Tab, Shift+Tab, and Ctrl+X A defaults and combo lookup.
+
+## Find in chat
+
+### Upstream behavior
+
+- No in-chat search exists. `mod+f` belongs to `find_in_file` alone (CodeMirror editor search, and the Markdown preview find bar).
+- The command palette has no chat search item. The timeline dialog filters user prompts only; it does not search assistant text and does not highlight matches in the transcript.
+- No per-session search state exists, so there is nothing to clean up on archive, deletion, or project/worktree removal.
+
+### Fork behavior
+
+- `find_in_chat` shares `mod+f` with `find_in_file`, and additionally opens from a composer-footer magnifier and a "Search in chat" command palette item. A floating bar renders over the transcript with query, `n/total` count, previous/next, close, case, whole-word, reasoning, tool-call, and whole-history toggles.
+- Counts and stepping come from the session's message data: user and assistant text by default, plus reasoning and tool calls (row description, arguments, output, error) when enabled. Virtualized rows make DOM-only find impossible, so the data index owns the count.
+- `ChatFindHighlightLayer` paints every mounted match softly and the current one strongly through the CSS Custom Highlight API, re-scanning on list mutations; navigation expands collapsed tool/reasoning/turn-activity blocks before painting and falls back to scroll-only where ranges cannot be resolved (markdown transforms, ANSI, no `CSS.highlights`).
+- Per-session state: toggles stay with the session across bar close/reopen and never leak between sessions; query/current match belong to the open bar and are parked/restored when switching sessions with the bar open, without forcing a scroll. Nothing is persisted.
+- Search state is cleared when a session is archived, deleted, or disappears with its project/worktree, through `cleanupPersistedSessionState`, `archiveSession`, `commitArchivedSessions`, the `session.patched` archive event, `useProjectsStore.removeProject`, and `removeProjectWorktree`.
+- History stays honest: without the whole-history toggle the bar says it searched loaded messages; with it checked, complete history loads with progress and "no matches" is withheld until coverage is complete. The checkbox is always visible and disabled with a "History is complete" hint once coverage is complete.
+
+### Files
+
+- `packages/ui/src/components/chat/components/ChatFindBar.tsx`
+- `packages/ui/src/components/chat/hooks/useChatFind.ts`
+- `packages/ui/src/components/chat/chatFindContext.ts`
+- `packages/ui/src/components/chat/lib/chatFindReveal.ts`
+- `packages/ui/src/components/chat/lib/search/` (`types.ts`, `chatSearchText.ts`, `chatSearchMatches.ts`, `DOCUMENTATION.md`)
+- `packages/ui/src/components/chat/message/ChatFindHighlightLayer.tsx`
+- `packages/ui/src/stores/useChatFindStore.ts`
+- `packages/ui/src/lib/search/textMatches.ts`
+- `packages/ui/src/lib/chatFindOwnership.ts`
+- `packages/ui/src/components/chat/ChatContainer.tsx`
+- `packages/ui/src/components/chat/ChatMessage.tsx`
+- `packages/ui/src/components/chat/MessageList.tsx`
+- `packages/ui/src/components/chat/composer/ui/ComposerFooter.tsx`
+- `packages/ui/src/components/chat/message/MessageBody.tsx`
+- `packages/ui/src/components/chat/message/parts/` (`ToolPart.tsx`, `ProgressiveGroup.tsx`, `ReasoningPart.tsx`, `AssistantTextPart.tsx`, `UserTextPart.tsx`, `DOCUMENTATION.md`)
+- `packages/ui/src/components/ui/CommandPalette.tsx`
+- `packages/ui/src/hooks/useKeyboardShortcuts.ts`
+- `packages/ui/src/hooks/useMiniChatKeyboardShortcuts.ts`
+- `packages/ui/src/index.css` (`::highlight(oc-chat-find*)`)
+- `packages/ui/src/lib/chatQuoteAnchor.ts` (`rangeFromStreamOffsets`)
+- `packages/ui/src/lib/shortcuts/config.ts`, `schema.test.ts`, `DOCUMENTATION.md`
+- `packages/ui/src/sync/session-actions.ts`, `session-deletion-cleanup.ts`, `sync-context.tsx`
+- `packages/ui/src/stores/useProjectsStore.ts`
+- `packages/ui/src/lib/worktrees/worktreeManager.ts`
+- every locale under `packages/ui/src/lib/i18n/messages/`
+
+### Invariants to preserve
+
+- A counted match always navigates; a highlight is never painted for a range the query did not match. Counts come from data, paints from the mounted DOM.
+- `mod+f` stays shared: `find_in_file` and `find_in_chat` are whitelisted as a contextual pair, and the chat handler yields whenever focus is inside another surface.
+- Session settings and the search run stay separate; restoring a session must not scroll, reselect, or re-evaluate under another session's toggles.
+- Paged history must never present an incomplete search as "no matches".
+- Reasoning search stays disabled while Reasoning Traces is off; tool search includes the visible row description, arguments, output, and error.
+- The highlight layer must stay mutation-free (CSS Custom Highlight API) so it needs no self-mutation filtering, and the bar must not reflow the timeline.
+
+### Tests that pin this
+
+- `packages/ui/src/lib/search/textMatches.test.ts`: case, whole word, overlap, Unicode boundaries.
+- `packages/ui/src/components/chat/lib/search/chatSearchText.test.ts`: role filtering, reasoning/tool gating, context payloads, dedup, synthetic context folding.
+- `packages/ui/src/components/chat/lib/search/chatSearchMatches.test.ts`: match ordering, occurrence keys, nearest-from-viewport selection.
+- `packages/ui/src/stores/useChatFindStore.test.ts`: per-session settings/run split, cross-session isolation, composite deletion, directory cleanup.
+- `packages/ui/src/sync/session-deletion-cleanup.test.ts`: chat find state cleared only for the deleted session.
+- `packages/ui/src/lib/shortcuts/schema.test.ts`: the shared `mod+f` pair.
+
