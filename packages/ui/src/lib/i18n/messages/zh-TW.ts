@@ -2199,7 +2199,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.find.nextAria': '下一個相符項',
   'chat.find.countAria': '第 {current} 個相符項，共 {total} 個',
   'chat.find.noMatches': '沒有相符項',
-  'chat.find.searchingHistory': '正在搜尋歷史記錄…',
+  'chat.find.loadingHistory': '正在載入完整歷史記錄…',
   'chat.find.historyError': '無法搜尋完整歷史記錄',
   'chat.find.retryHistory': '重試',
   'chat.find.caseSensitive': '區分大小寫',

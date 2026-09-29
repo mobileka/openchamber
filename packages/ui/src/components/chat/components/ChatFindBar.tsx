@@ -8,6 +8,10 @@
  *
  * The bar owns only presentation and local focus/keys: match counts, history
  * state, and selection live in `useChatFind`.
+ *
+ * Until whole-history coverage is complete the bar is a gate rather than a
+ * search box: the field is replaced by a status note and focus sits on the
+ * bar root, so Escape still works without summoning a mobile keyboard.
  */
 
 import React from 'react';
@@ -25,7 +29,7 @@ type ChatFindBarProps = {
   settings: ChatFindSettings;
   matchCount: number;
   currentIndex: number;
-  isSearchingHistory: boolean;
+  isHistoryLoading: boolean;
   hasHistoryError: boolean;
   /** Bumped when the open shortcut is pressed again to re-focus the input. */
   focusNonce: number;
@@ -46,7 +50,7 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
   settings,
   matchCount,
   currentIndex,
-  isSearchingHistory,
+  isHistoryLoading,
   hasHistoryError,
   focusNonce,
   className,
@@ -59,9 +63,19 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
 }) => {
   const { t } = useI18n();
   const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
   const returnFocusRef = React.useRef<HTMLElement | null>(null);
   const wasOpenRef = React.useRef(false);
+  /** True once the field has taken focus in the current unblocked phase. */
+  const focusedFieldRef = React.useRef(false);
 
+  const blocked = isHistoryLoading || hasHistoryError;
+
+  // Opening records the return target and, while coverage loads, puts focus
+  // on the bar root: the field is a status note then, and the root keeps
+  // Escape working without summoning the mobile keyboard. A session switch
+  // can take an open bar back to loading, and a retry back to waiting, so
+  // the block re-focuses rather than only handling the first open.
   React.useEffect(() => {
     if (!open) {
       return;
@@ -72,9 +86,11 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
       if (previous instanceof HTMLElement) {
         returnFocusRef.current = previous;
       }
-      inputRef.current?.focus();
     }
-  }, [open]);
+    if (blocked) {
+      rootRef.current?.focus();
+    }
+  }, [blocked, isHistoryLoading, open]);
 
   // Closing from any path (button, Escape, session switch) returns focus.
   React.useEffect(() => {
@@ -89,6 +105,23 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
     }
   }, [open]);
 
+  // Complete coverage folds the field back in; put the cursor there once per
+  // unblocked phase, because a session switch can re-block the bar while it
+  // stays open.
+  React.useEffect(() => {
+    if (!open || blocked) {
+      focusedFieldRef.current = false;
+      return;
+    }
+    if (focusedFieldRef.current) {
+      return;
+    }
+    focusedFieldRef.current = true;
+    inputRef.current?.focus();
+  }, [blocked, open]);
+
+  // A repeated open shortcut re-focuses and selects the query. While blocked
+  // the input is unmounted, so the same call is a no-op.
   React.useEffect(() => {
     if (open && focusNonce > 0) {
       inputRef.current?.focus();
@@ -121,42 +154,70 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
     }
   };
 
+  // While blocked the root holds focus, so Escape arrives here instead of on
+  // the unmounted input; the input's own handler stops propagation otherwise.
+  const handleRootKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+  };
+
   const countLabel = matchCount > 0 ? `${currentIndex + 1}/${matchCount}` : '';
 
   return (
     <div
+      ref={rootRef}
       role="search"
       aria-label={t('chat.find.openAria')}
+      tabIndex={blocked ? -1 : undefined}
+      onKeyDown={handleRootKeyDown}
       className={cn(
-        'oc-chat-find-bar absolute inset-x-3 top-3 z-30 flex flex-col gap-1.5 rounded-xl border border-border/60 bg-[var(--surface-elevated)] p-1.5 shadow-lg',
+        'oc-chat-find-bar absolute inset-x-3 top-3 z-30 flex flex-col gap-1.5 rounded-xl border border-border/60 bg-[var(--surface-elevated)] p-1.5 shadow-lg outline-none',
         className,
       )}
     >
       <div className="flex items-center gap-1.5">
         <div className="oc-chat-find-field flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-[var(--surface-background)] px-2 ring-1 ring-inset ring-border/60 transition duration-200 ease-out focus-within:ring-2 focus-within:ring-[var(--interactive-focus-ring)]">
           <Icon name="search" className="size-3.5 shrink-0 text-muted-foreground" />
-          <Input
-            ref={inputRef}
-            value={query}
-            onChange={(event) => onChangeQuery(event.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={t('chat.find.placeholder')}
-            aria-label={t('chat.find.placeholder')}
-            className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0"
-          />
-          <span
-            className="min-w-10 shrink-0 text-center typography-micro text-muted-foreground tabular-nums"
-            aria-live="polite"
-            aria-label={matchCount > 0 ? t('chat.find.countAria', { current: currentIndex + 1, total: matchCount }) : undefined}
-          >
-            {countLabel}
-          </span>
+          {blocked ? (
+            isHistoryLoading ? (
+              <span
+                role="status"
+                className="min-w-0 flex-1 truncate text-sm italic text-muted-foreground"
+              >
+                {t('chat.find.loadingHistory')}
+              </span>
+            ) : null
+          ) : (
+            <Input
+              ref={inputRef}
+              value={query}
+              onChange={(event) => onChangeQuery(event.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={t('chat.find.placeholder')}
+              aria-label={t('chat.find.placeholder')}
+              className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-sm shadow-none focus-visible:ring-0"
+            />
+          )}
+          {blocked ? null : (
+            <span
+              className="min-w-10 shrink-0 text-center typography-micro text-muted-foreground tabular-nums"
+              aria-live="polite"
+              aria-label={matchCount > 0 ? t('chat.find.countAria', { current: currentIndex + 1, total: matchCount }) : undefined}
+            >
+              {countLabel}
+            </span>
+          )}
           <Button
             type="button"
             variant="chip"
             size="xs"
             className={TOGGLE_CLASS}
             aria-pressed={settings.caseSensitive}
+            disabled={blocked}
             onClick={() => onToggleSetting('caseSensitive')}
             title={t('chat.find.caseSensitive')}
             aria-label={t('chat.find.caseSensitive')}
@@ -169,6 +230,7 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
             size="xs"
             className={TOGGLE_CLASS}
             aria-pressed={settings.wholeWord}
+            disabled={blocked}
             onClick={() => onToggleSetting('wholeWord')}
             title={t('chat.find.wholeWord')}
             aria-label={t('chat.find.wholeWord')}
@@ -184,7 +246,7 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
           onClick={onPrevious}
           title={t('chat.find.previousAria')}
           aria-label={t('chat.find.previousAria')}
-          disabled={matchCount === 0}
+          disabled={blocked || matchCount === 0}
         >
           <Icon name="arrow-up" className="size-3.5" />
         </Button>
@@ -196,7 +258,7 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
           onClick={onNext}
           title={t('chat.find.nextAria')}
           aria-label={t('chat.find.nextAria')}
-          disabled={matchCount === 0}
+          disabled={blocked || matchCount === 0}
         >
           <Icon name="arrow-down" className="size-3.5" />
         </Button>
@@ -216,15 +278,24 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
       {hasHistoryError ? (
         <div className="flex items-center gap-1 px-1 typography-micro text-[var(--status-error-text)]" role="status">
           <span>{t('chat.find.historyError')}</span>
-          <Button type="button" variant="link" size="xs" className="h-auto px-0 py-0" onClick={onRetryHistory}>
+          <Button
+            type="button"
+            variant="link"
+            size="xs"
+            className="h-auto gap-1 px-0 py-0"
+            onClick={onRetryHistory}
+            title={t('chat.find.retryHistory')}
+            aria-label={t('chat.find.retryHistory')}
+          >
+            <Icon name="refresh" className="size-3" />
             {t('chat.find.retryHistory')}
           </Button>
         </div>
       ) : null}
 
-      {!hasHistoryError && trimmed.length > 0 && matchCount === 0 ? (
+      {!blocked && trimmed.length > 0 && matchCount === 0 ? (
         <div className="px-1 typography-micro text-muted-foreground" role="status">
-          {isSearchingHistory ? t('chat.find.searchingHistory') : t('chat.find.noMatches')}
+          {t('chat.find.noMatches')}
         </div>
       ) : null}
     </div>

@@ -2035,7 +2035,7 @@ export const dict = {
   'chat.find.nextAria': 'Nächster Treffer',
   'chat.find.countAria': 'Treffer {current} von {total}',
   'chat.find.noMatches': 'Keine Treffer',
-  'chat.find.searchingHistory': 'Verlauf wird durchsucht…',
+  'chat.find.loadingHistory': 'Der vollständige Verlauf wird geladen…',
   'chat.find.historyError': 'Der gesamte Verlauf konnte nicht durchsucht werden',
   'chat.find.retryHistory': 'Erneut versuchen',
   'chat.find.caseSensitive': 'Groß-/Kleinschreibung beachten',

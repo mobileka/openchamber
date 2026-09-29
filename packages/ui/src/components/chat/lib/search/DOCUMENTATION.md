@@ -46,8 +46,8 @@ range between the find bar and the composer through the reflows that follow
 (streaming, virtualizer measurement). If a counted match never resolves to a
 rendered range, the layer falls back to bringing its message into view. The
 reader's own scroll ends that following until the next match. A session switch
-holds the centering off for the restored match, so the timeline's viewport
-restore stays in charge.
+re-centers the parked match when there is one; only a restored run without a
+current match leaves the timeline's own viewport restore in charge.
 
 ## Per-session state
 
@@ -61,9 +61,10 @@ session:
   open. An empty message list is a load state, not a no-match result: the
   parked current match survives it and is re-resolved once messages return.
 
-Returning to a session must not move the viewport: both the controller and the
-highlight layer skip the reveal/scroll for the first selection after a session
-change, leaving the timeline's own viewport restore in charge.
+Returning to a session with a parked search puts the reader back on the parked
+match: the controller re-reveals it and the highlight layer re-centers it. Only
+a restored run without a current match leaves the timeline's own viewport
+restore in charge.
 
 Entries are removed when a session is deleted, archived, or disappears with
 its project or worktree (`cleanupPersistedSessionState`, the archive paths,
@@ -72,8 +73,16 @@ its project or worktree (`cleanupPersistedSessionState`, the archive paths,
 ## Whole history
 
 Find always covers the whole conversation: opening the bar loads complete
-history through `SessionMessageLoader.loadComplete`, and "no matches" is
-withheld until coverage is complete; failure shows an inline retry.
+history through `SessionMessageLoader.loadComplete`. Until coverage is
+complete the bar is a gate, not a search box: the field shows "Loading the
+full history…", the count is hidden, the toggles and stepping are disabled,
+and close/Escape stay live. Focus sits on the bar root, so Escape works
+without summoning a mobile keyboard; the input appears and takes focus once
+when coverage completes, never page by page. Failure keeps the gate up and
+shows an inline retry. The failure is remembered across close and reopen, so
+the bar never reopens into a loading state nothing will resolve; retry starts
+a new attempt and returns to the loading state. "No matches" is withheld while
+the gate is up.
 
 ## Shortcut
 

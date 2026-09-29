@@ -2225,7 +2225,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.find.nextAria': '次の一致',
   'chat.find.countAria': '{total} 件中 {current} 件目の一致',
   'chat.find.noMatches': '一致なし',
-  'chat.find.searchingHistory': '履歴を検索中…',
+  'chat.find.loadingHistory': '履歴全体を読み込み中…',
   'chat.find.historyError': '履歴全体を検索できませんでした',
   'chat.find.retryHistory': '再試行',
   'chat.find.caseSensitive': '大文字と小文字を区別',

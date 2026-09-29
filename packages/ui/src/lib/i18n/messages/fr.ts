@@ -1962,7 +1962,7 @@ export const dict = {
   'chat.find.nextAria': 'Correspondance suivante',
   'chat.find.countAria': 'Correspondance {current} sur {total}',
   'chat.find.noMatches': 'Aucune correspondance',
-  'chat.find.searchingHistory': 'Recherche dans l\'historique…',
+  'chat.find.loadingHistory': 'Chargement de l\'historique complet…',
   'chat.find.historyError': 'Impossible de rechercher dans tout l\'historique',
   'chat.find.retryHistory': 'Réessayer',
   'chat.find.caseSensitive': 'Respecter la casse',

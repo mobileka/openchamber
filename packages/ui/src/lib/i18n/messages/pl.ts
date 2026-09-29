@@ -851,7 +851,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.find.nextAria': 'Następne dopasowanie',
   'chat.find.countAria': 'Dopasowanie {current} z {total}',
   'chat.find.noMatches': 'Brak dopasowań',
-  'chat.find.searchingHistory': 'Przeszukiwanie historii…',
+  'chat.find.loadingHistory': 'Wczytywanie pełnej historii…',
   'chat.find.historyError': 'Nie udało się przeszukać całej historii',
   'chat.find.retryHistory': 'Spróbuj ponownie',
   'chat.find.caseSensitive': 'Uwzględnij wielkość liter',

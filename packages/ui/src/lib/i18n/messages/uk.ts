@@ -2207,7 +2207,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.find.nextAria": "Наступний збіг",
   "chat.find.countAria": "Збіг {current} з {total}",
   "chat.find.noMatches": "Збігів немає",
-  "chat.find.searchingHistory": "Пошук в історії…",
+  "chat.find.loadingHistory": "Завантаження повної історії…",
   "chat.find.historyError": "Не вдалося переглянути всю історію",
   "chat.find.retryHistory": "Спробувати ще раз",
   "chat.find.caseSensitive": "Враховувати регістр",

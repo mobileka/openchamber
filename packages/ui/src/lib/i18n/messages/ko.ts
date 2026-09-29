@@ -2231,7 +2231,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.find.nextAria': '다음 일치',
   'chat.find.countAria': '{total}개 중 {current}번째 일치',
   'chat.find.noMatches': '일치 항목 없음',
-  'chat.find.searchingHistory': '기록 검색 중…',
+  'chat.find.loadingHistory': '전체 기록을 불러오는 중…',
   'chat.find.historyError': '전체 기록을 검색하지 못했습니다',
   'chat.find.retryHistory': '다시 시도',
   'chat.find.caseSensitive': '대/소문자 구분',

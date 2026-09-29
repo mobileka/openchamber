@@ -2229,7 +2229,7 @@ export const dict = {
   'chat.find.nextAria': 'Next match',
   'chat.find.countAria': 'Match {current} of {total}',
   'chat.find.noMatches': 'No matches',
-  'chat.find.searchingHistory': 'Searching history…',
+  'chat.find.loadingHistory': 'Loading the full history…',
   'chat.find.historyError': "Couldn't search the whole history",
   'chat.find.retryHistory': 'Retry',
   'chat.find.caseSensitive': 'Match case',

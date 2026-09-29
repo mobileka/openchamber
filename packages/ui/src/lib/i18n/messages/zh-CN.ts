@@ -2195,7 +2195,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.find.nextAria': '下一个匹配',
   'chat.find.countAria': '第 {current} 个匹配，共 {total} 个',
   'chat.find.noMatches': '没有匹配项',
-  'chat.find.searchingHistory': '正在搜索历史记录…',
+  'chat.find.loadingHistory': '正在加载完整历史记录…',
   'chat.find.historyError': '无法搜索全部历史记录',
   'chat.find.retryHistory': '重试',
   'chat.find.caseSensitive': '区分大小写',

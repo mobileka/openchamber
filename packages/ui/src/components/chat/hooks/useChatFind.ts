@@ -35,7 +35,7 @@ export type ChatFindController = {
   matches: ChatFindMatch[];
   currentIndex: number;
   currentMatch: ChatFindMatch | null;
-  isSearchingHistory: boolean;
+  isHistoryLoading: boolean;
   hasHistoryError: boolean;
   open: () => void;
   close: () => void;
@@ -58,6 +58,28 @@ export type UseChatFindOptions = {
 };
 
 const EMPTY_MATCHES: ChatFindMatch[] = [];
+
+type ChatFindHistoryGate = {
+  /** Complete coverage is still loading, with no failure recorded. */
+  isHistoryLoading: boolean;
+  /** The last complete-coverage load failed; the retry control is shown. */
+  hasHistoryError: boolean;
+};
+
+/**
+ * Whole-history coverage gate for the find bar: the input stays blocked until
+ * coverage is complete, so the count can never describe a partial
+ * conversation. A failed load keeps the block up and swaps the loading note
+ * for the retry.
+ */
+export const deriveFindHistoryGate = (
+  isOpen: boolean,
+  historyComplete: boolean,
+  historyError: ChatFindRun['historyError'] | undefined,
+): ChatFindHistoryGate => ({
+  isHistoryLoading: isOpen && !historyComplete && historyError == null,
+  hasHistoryError: historyError != null,
+});
 
 const patchForSetting = (key: keyof ChatFindSettings, value: boolean): Partial<ChatFindSettings> => {
   const patch: Partial<ChatFindSettings> = {};
@@ -107,6 +129,9 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
   const [selectionNonce, setSelectionNonce] = React.useState(0);
   const [historyRetryNonce, setHistoryRetryNonce] = React.useState(0);
   const historySentForRef = React.useRef<string | null>(null);
+  // Request key of the last attempt that failed. It outlives the bar's close
+  // so reopening can offer retry instead of a spinner nothing will resolve.
+  const historyFailedForRef = React.useRef<string | null>(null);
 
   const updateRun = React.useCallback((patch: Partial<ChatFindRun>) => {
     if (sessionKey) {
@@ -241,7 +266,9 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
   }, [isOpen, run?.currentKey, sessionKey]);
 
   // Find always covers the whole conversation: opening the bar loads complete
-  // coverage once per session and retry.
+  // coverage once per session and retry. A failed attempt is remembered so
+  // reopening shows the error and the retry control, never a stuck spinner;
+  // the retry itself starts a new attempt.
   React.useEffect(() => {
     if (!isOpen || options.historyComplete) {
       return;
@@ -251,22 +278,26 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
     }
     const requestKey = `${options.sessionId}|${historyRetryNonce}`;
     if (historySentForRef.current === requestKey) {
+      if (historyFailedForRef.current === requestKey) {
+        updateRun({ historyError: 'history-load-failed' });
+      }
       return;
     }
     historySentForRef.current = requestKey;
-    let cancelled = false;
+    historyFailedForRef.current = null;
     updateRun({ historyError: null });
     void options.messageLoader
       .loadComplete({ directory: options.directory, sessionID: options.sessionId })
       .catch(() => {
-        if (cancelled) {
+        historyFailedForRef.current = requestKey;
+        // A retry or another session owns the loading state now; a closed bar
+        // drops the update on the floor, and reopening reads the failure
+        // marker above.
+        if (historySentForRef.current !== requestKey) {
           return;
         }
         updateRun({ historyError: 'history-load-failed' });
       });
-    return () => {
-      cancelled = true;
-    };
   }, [
     historyRetryNonce,
     isOpen,
@@ -323,6 +354,7 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
 
   const currentIndex = resolveCurrentIndex();
   const currentMatch = currentIndex >= 0 ? matches[currentIndex] ?? null : null;
+  const historyGate = deriveFindHistoryGate(isOpen, options.historyComplete, run?.historyError);
 
   return {
     isOpen,
@@ -331,10 +363,8 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
     matches,
     currentIndex,
     currentMatch,
-    isSearchingHistory: isOpen
-      && !options.historyComplete
-      && run?.historyError === null,
-    hasHistoryError: run?.historyError !== null && run?.historyError !== undefined,
+    isHistoryLoading: historyGate.isHistoryLoading,
+    hasHistoryError: historyGate.hasHistoryError,
     open,
     close,
     setQuery,

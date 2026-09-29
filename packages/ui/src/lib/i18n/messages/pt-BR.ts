@@ -2207,7 +2207,7 @@ export const dict: Record<I18nKey, string> = {
   "chat.find.nextAria": "Próxima correspondência",
   "chat.find.countAria": "Correspondência {current} de {total}",
   "chat.find.noMatches": "Nenhuma correspondência",
-  "chat.find.searchingHistory": "Pesquisando no histórico…",
+  "chat.find.loadingHistory": "Carregando o histórico completo…",
   "chat.find.historyError": "Não foi possível pesquisar todo o histórico",
   "chat.find.retryHistory": "Tentar novamente",
   "chat.find.caseSensitive": "Diferenciar maiúsculas e minúsculas",

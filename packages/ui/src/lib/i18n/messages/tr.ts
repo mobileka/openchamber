@@ -2188,7 +2188,7 @@ export const dict = {
   'chat.find.nextAria': 'Sonraki eşleşme',
   'chat.find.countAria': '{total} eşleşmeden {current}.',
   'chat.find.noMatches': 'Eşleşme yok',
-  'chat.find.searchingHistory': 'Geçmiş aranıyor…',
+  'chat.find.loadingHistory': 'Tüm geçmiş yükleniyor…',
   'chat.find.historyError': 'Geçmişin tamamı aranamadı',
   'chat.find.retryHistory': 'Yeniden dene',
   'chat.find.caseSensitive': 'Büyük/küçük harf eşleştir',
