@@ -29,16 +29,16 @@ describe('useChatFindStore', () => {
   test('keeps session settings across close and reopen while the run resets', () => {
     const key = keyFor(directory, sessionId);
     open(directory, sessionId);
-    useChatFindStore.getState().updateSettings(key, { includeTools: true, wholeWord: true });
-    useChatFindStore.getState().updateRun(key, { query: 'cat', currentKey: 'm1:0:text:0', currentIndex: 2 });
+    useChatFindStore.getState().updateSettings(key, { caseSensitive: true, wholeWord: true });
+    useChatFindStore.getState().updateRun(key, { query: 'cat', currentKey: 'm1:0:0', currentIndex: 2 });
 
     useChatFindStore.getState().closeSession(key);
     expect(entryFor(directory, sessionId)?.run).toBeNull();
-    expect(entryFor(directory, sessionId)?.settings).toMatchObject({ includeTools: true, wholeWord: true });
+    expect(entryFor(directory, sessionId)?.settings).toMatchObject({ caseSensitive: true, wholeWord: true });
 
     const reopened = open(directory, sessionId);
     expect(reopened.run).toEqual({ query: '', currentKey: null, currentIndex: 0, historyError: null });
-    expect(reopened.settings).toMatchObject({ includeTools: true, wholeWord: true });
+    expect(reopened.settings).toMatchObject({ caseSensitive: true, wholeWord: true });
   });
 
   test('reopening an already open session preserves its run', () => {
@@ -55,15 +55,15 @@ describe('useChatFindStore', () => {
     const second = keyFor('/repo-b', 'ses_1');
     open('/repo-a', 'ses_1');
     open('/repo-b', 'ses_1');
-    useChatFindStore.getState().updateSettings(first, { includeReasoning: true });
-    expect(useChatFindStore.getState().entries[first]?.settings.includeReasoning).toBe(true);
-    expect(useChatFindStore.getState().entries[second]?.settings.includeReasoning).toBe(false);
+    useChatFindStore.getState().updateSettings(first, { caseSensitive: true });
+    expect(useChatFindStore.getState().entries[first]?.settings.caseSensitive).toBe(true);
+    expect(useChatFindStore.getState().entries[second]?.settings.caseSensitive).toBe(false);
   });
 
   test('updateRun and updateSettings ignore unknown sessions', () => {
     const key = keyFor(directory, sessionId);
     useChatFindStore.getState().updateRun(key, { query: 'cat' });
-    useChatFindStore.getState().updateSettings(key, { includeTools: true });
+    useChatFindStore.getState().updateSettings(key, { wholeWord: true });
     expect(useChatFindStore.getState().entries[key]).toBeUndefined();
   });
 

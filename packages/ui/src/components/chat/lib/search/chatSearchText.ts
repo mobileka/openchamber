@@ -4,24 +4,18 @@
  * The index runs on the same display list the timeline renders: duplicates
  * collapse, malformed parts drop, and synthetic context messages fold back
  * onto their user message, so a context quote is searchable exactly where the
- * reader sees it. Roles other than user/assistant (compaction, shell, subtask,
- * plumbing) are not conversation text and stay out of scope.
+ * reader sees it. Only rendered text parts are indexed; reasoning blocks and
+ * tool cards are not conversation text, and neither are roles other than
+ * user/assistant (compaction, shell, subtask, plumbing).
  */
 
 import { readContextPart, type ContextPartPayload } from '@/lib/messages/contextParts';
-import { toolDescription, type ToolDescription } from '@/lib/opencode/tools';
-import type { ToolPart } from '@/lib/opencode/model';
 
 import { deriveMessageRole } from '../../message/messageRole';
 import { attachSyntheticContext } from '../attachSyntheticContext';
 import { getNormalizedMessageForDisplay } from '../messageDisplayNormalization';
 import type { ChatMessageEntry } from '../turns/types';
-import type { ChatFindMatchKind, ChatFindSearchableChunk, ChatFindSearchableMessage } from './types';
-
-export type ChatFindExtractionOptions = {
-  includeReasoning: boolean;
-  includeTools: boolean;
-};
+import type { ChatFindSearchableChunk, ChatFindSearchableMessage } from './types';
 
 const contextSearchText = (payload: ContextPartPayload): string => {
   switch (payload.kind) {
@@ -49,100 +43,45 @@ const contextSearchText = (payload: ContextPartPayload): string => {
   }
 };
 
-/** The row subtitle a tool card already shows, flattened for matching. */
-const toolDescriptionSearchText = (description: ToolDescription | null): string => {
-  if (!description) {
-    return '';
-  }
-  switch (description.kind) {
-    case 'path':
-    case 'text':
-      return description.value;
-    case 'files':
-      return description.files.join('\n');
-    case 'tools':
-      return description.calls.map((call) => call.name).join('\n');
-    case 'questions':
-      // The row renders a localized count, not searchable content.
-      return '';
-  }
-};
-
-const toolSearchText = (part: ToolPart): string => {
-  const fields: string[] = [part.tool];
-  const { state } = part;
-  const metadata = 'metadata' in state ? state.metadata : undefined;
-  const description = toolDescriptionSearchText(toolDescription(part.tool, state.input, metadata));
-  if (description) {
-    fields.push(description);
-  }
-  fields.push(JSON.stringify(state.input));
-  if (state.status === 'completed' || state.status === 'error') {
-    if (state.output) {
-      fields.push(state.output);
-    }
-    if (state.status === 'error' && state.error) {
-      fields.push(state.error);
-    }
-  }
-  return fields.join('\n');
-};
-
 /**
  * The ordered text chunks one message contributes to the find index.
  * `index` is assigned only to chunks that carry text, so identities stay
- * stable for a given message and settings combination.
+ * stable for a given message.
  *
  * Cached by the message entry's identity: the sync layer keeps unchanged
  * message objects stable, so an open bar re-indexing during streaming only
  * re-extracts the message that actually changed.
  */
-const chunkCache = new WeakMap<
-  ChatMessageEntry,
-  { includeReasoning: boolean; includeTools: boolean; chunks: ChatFindSearchableChunk[] }
->();
+const chunkCache = new WeakMap<ChatMessageEntry, ChatFindSearchableChunk[]>();
 
-export const extractSearchableChunks = (
-  message: ChatMessageEntry,
-  options: ChatFindExtractionOptions,
-): ChatFindSearchableChunk[] => {
+export const extractSearchableChunks = (message: ChatMessageEntry): ChatFindSearchableChunk[] => {
   const cached = chunkCache.get(message);
-  if (cached && cached.includeReasoning === options.includeReasoning && cached.includeTools === options.includeTools) {
-    return cached.chunks;
+  if (cached) {
+    return cached;
   }
 
   const chunks: ChatFindSearchableChunk[] = [];
-  const push = (kind: ChatFindMatchKind, partId: string | undefined, text: string): void => {
+  const push = (partId: string | undefined, text: string): void => {
     if (text.trim().length === 0) {
       return;
     }
-    chunks.push({ index: chunks.length, partId, kind, text });
+    chunks.push({ index: chunks.length, partId, text });
   };
 
   for (const part of message.parts) {
-    if (part.type === 'text') {
-      const context = readContextPart(part);
-      push('text', part.id, context ? contextSearchText(context) : part.text);
+    if (part.type !== 'text') {
       continue;
     }
-    if (part.type === 'reasoning') {
-      if (options.includeReasoning) {
-        push('reasoning', part.id, part.text);
-      }
-      continue;
-    }
-    if (part.type === 'tool' && options.includeTools) {
-      push('tool', part.id, toolSearchText(part));
-    }
+    const context = readContextPart(part);
+    push(part.id, context ? contextSearchText(context) : part.text);
   }
-  chunkCache.set(message, { ...options, chunks });
+  chunkCache.set(message, chunks);
   return chunks;
 };
 
 /** The display-ordered, deduplicated messages the index searches. */
 export const buildSearchableMessages = (
   messages: ChatMessageEntry[],
-  options: ChatFindExtractionOptions,
 ): ChatFindSearchableMessage[] => {
   if (messages.length === 0) {
     return [];
@@ -170,7 +109,7 @@ export const buildSearchableMessages = (
     if (role.role !== 'user' && role.role !== 'assistant') {
       continue;
     }
-    const chunks = extractSearchableChunks(message, options);
+    const chunks = extractSearchableChunks(message);
     if (chunks.length === 0) {
       continue;
     }

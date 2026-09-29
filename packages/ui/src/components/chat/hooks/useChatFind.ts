@@ -6,8 +6,8 @@
  * its query and current match and restores them when the reader returns.
  *
  * Counts and stepping come from the data index; navigation asks the container
- * to scroll and reveal (expand) the match's block, and the highlight layer
- * paints it once the row is mounted.
+ * to scroll to the match's message and reveal its turn, and the highlight
+ * layer paints the range once the row is mounted.
  */
 
 import React from 'react';
@@ -35,7 +35,6 @@ export type ChatFindController = {
   matches: ChatFindMatch[];
   currentIndex: number;
   currentMatch: ChatFindMatch | null;
-  historyComplete: boolean;
   isSearchingHistory: boolean;
   hasHistoryError: boolean;
   open: () => void;
@@ -55,8 +54,6 @@ export type UseChatFindOptions = {
   activeTurnIndex: number;
   historyComplete: boolean;
   messageLoader: SessionMessageLoader;
-  /** The Reasoning Traces setting: the reasoning toggle is inert without it. */
-  reasoningVisible: boolean;
   revealMatch: (match: ChatFindMatch) => void;
 };
 
@@ -77,18 +74,12 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
   const settings = entry?.settings ?? DEFAULT_CHAT_FIND_SETTINGS;
   const run = entry?.run ?? null;
   const isOpen = run !== null;
-  const includeReasoning = settings.includeReasoning && options.reasoningVisible;
 
   // Extraction is skipped entirely while the bar is closed so a hidden find
   // surface performs no ongoing work on streaming updates.
   const searchableMessages = React.useMemo(
-    () => (isOpen
-      ? buildSearchableMessages(options.messages, {
-          includeReasoning,
-          includeTools: settings.includeTools,
-        })
-      : []),
-    [includeReasoning, isOpen, options.messages, settings.includeTools],
+    () => (isOpen ? buildSearchableMessages(options.messages) : []),
+    [isOpen, options.messages],
   );
 
   const query = run?.query ?? '';
@@ -192,10 +183,15 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
 
   // A new query or changed toggles select the nearest match from the viewport
   // instead of yanking the reader back to the top of a long conversation.
+  // `selectionNonce` is the trigger: dependency identity changes (a session
+  // switch rebuilds `updateRun`) must not re-select, or a parked match would
+  // be replaced by the first match when the reader comes back.
+  const handledSelectionRef = React.useRef(0);
   React.useEffect(() => {
-    if (!isOpen || selectionNonce === 0) {
+    if (!isOpen || selectionNonce === 0 || selectionNonce === handledSelectionRef.current) {
       return;
     }
+    handledSelectionRef.current = selectionNonce;
     const current = runRef.current;
     if (!current) {
       return;
@@ -210,9 +206,10 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
     updateRun({ currentKey: match?.key ?? null, currentIndex: match ? index : 0 });
   }, [isOpen, selectionNonce, updateRun]);
 
-  // Reveal each newly selected match exactly once. A session switch parks the
-  // run and restores it later; the restored match must not pull the viewport
-  // away from the reader's remembered position.
+  // Reveal each newly selected match exactly once, and put the reader back on
+  // the current match when they return to a session whose search is still
+  // parked. A session switch parks the run; the restored match is focused
+  // again, not left wherever the timeline's own restore lands.
   const revealedRef = React.useRef<{ sessionKey: string | null; key: string | null }>({
     sessionKey: null,
     key: null,
@@ -225,6 +222,12 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
     const key = run?.currentKey ?? null;
     if (revealedRef.current.sessionKey !== sessionKey) {
       revealedRef.current = { sessionKey, key };
+      const restored = key
+        ? matchesRef.current.find((candidate) => candidate.key === key)
+        : undefined;
+      if (restored) {
+        revealRef.current(restored);
+      }
       return;
     }
     if (!key || key === revealedRef.current.key) {
@@ -237,9 +240,10 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
     }
   }, [isOpen, run?.currentKey, sessionKey]);
 
-  // Whole-history search loads complete coverage once per session and retry.
+  // Find always covers the whole conversation: opening the bar loads complete
+  // coverage once per session and retry.
   React.useEffect(() => {
-    if (!isOpen || !settings.includeWholeHistory || options.historyComplete) {
+    if (!isOpen || options.historyComplete) {
       return;
     }
     if (!options.sessionId || !options.directory) {
@@ -270,7 +274,6 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
     options.historyComplete,
     options.messageLoader,
     options.sessionId,
-    settings.includeWholeHistory,
     updateRun,
   ]);
 
@@ -328,9 +331,7 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
     matches,
     currentIndex,
     currentMatch,
-    historyComplete: options.historyComplete,
     isSearchingHistory: isOpen
-      && settings.includeWholeHistory
       && !options.historyComplete
       && run?.historyError === null,
     hasHistoryError: run?.historyError !== null && run?.historyError !== undefined,

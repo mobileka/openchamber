@@ -6,13 +6,13 @@ import type { ChatFindMatch, ChatFindSearchableMessage } from './types';
 const messages: ChatFindSearchableMessage[] = [
   {
     messageId: 'm1',
-    chunks: [{ index: 0, partId: 'p1', kind: 'text', text: 'cat dog cat' }],
+    chunks: [{ index: 0, partId: 'p1', text: 'cat dog cat' }],
   },
   {
     messageId: 'm2',
     chunks: [
-      { index: 0, partId: 'p2', kind: 'reasoning', text: 'cat in reasoning' },
-      { index: 1, partId: 'p3', kind: 'tool', text: 'cat in tool output' },
+      { index: 0, partId: 'p2', text: 'cat in the second chunk' },
+      { index: 1, partId: 'p3', text: 'cat in the third chunk' },
     ],
   },
 ];
@@ -20,12 +20,14 @@ const messages: ChatFindSearchableMessage[] = [
 describe('buildChatSearchMatches', () => {
   test('orders matches by message, chunk, and offset with occurrence numbers', () => {
     const matches = buildChatSearchMatches(messages, 'cat', { caseSensitive: false, wholeWord: false });
-    expect(matches.map((match) => `${match.messageId}:${match.kind}:${match.occurrence}`)).toEqual([
-      'm1:text:0',
-      'm1:text:1',
-      'm2:reasoning:0',
-      'm2:tool:0',
+    expect(matches.map((match) => `${match.messageId}:${match.partId}:${match.occurrence}`)).toEqual([
+      'm1:p1:0',
+      'm1:p1:1',
+      'm2:p2:0',
+      'm2:p3:0',
     ]);
+    expect(matches[0]?.key).toBe('m1:0:0');
+    expect(matches[1]?.key).toBe('m1:0:1');
     expect(matches[0]).toMatchObject({ start: 0, end: 3, partId: 'p1' });
     expect(matches[1]).toMatchObject({ start: 8, end: 11 });
   });
@@ -36,7 +38,7 @@ describe('buildChatSearchMatches', () => {
 
   test('applies whole-word and case options', () => {
     const word = buildChatSearchMatches(
-      [{ messageId: 'm1', chunks: [{ index: 0, kind: 'text', text: 'cat concatenate' }] }],
+      [{ messageId: 'm1', chunks: [{ index: 0, text: 'cat concatenate' }] }],
       'cat',
       { caseSensitive: false, wholeWord: true },
     );
@@ -44,7 +46,7 @@ describe('buildChatSearchMatches', () => {
     expect(word[0]?.start).toBe(0);
 
     const caseSensitive = buildChatSearchMatches(
-      [{ messageId: 'm1', chunks: [{ index: 0, kind: 'text', text: 'Cat cat' }] }],
+      [{ messageId: 'm1', chunks: [{ index: 0, text: 'Cat cat' }] }],
       'cat',
       { caseSensitive: true, wholeWord: false },
     );
@@ -55,9 +57,9 @@ describe('buildChatSearchMatches', () => {
 
 describe('selectNearestMatchIndex', () => {
   const matches: ChatFindMatch[] = [
-    { key: 'a', messageId: 'm1', kind: 'text', occurrence: 0, start: 0, end: 1 },
-    { key: 'b', messageId: 'm2', kind: 'text', occurrence: 0, start: 0, end: 1 },
-    { key: 'c', messageId: 'm3', kind: 'text', occurrence: 0, start: 0, end: 1 },
+    { key: 'a', messageId: 'm1', occurrence: 0, start: 0, end: 1 },
+    { key: 'b', messageId: 'm2', occurrence: 0, start: 0, end: 1 },
+    { key: 'c', messageId: 'm3', occurrence: 0, start: 0, end: 1 },
   ];
   const turnIndex = new Map([
     ['m1', 0],

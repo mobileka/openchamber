@@ -6,6 +6,12 @@
 import { create } from "zustand"
 import { getRuntimeKey } from "@/lib/runtime-switch"
 
+/** The row at the viewport top, for returning to a session where it was left. */
+type ViewportRestoreAnchor = {
+  messageId: string
+  offsetTop: number
+}
+
 export type SessionMemoryState = {
   viewportAnchor: number
   /** Last known scrollbar pixel state — saved on every scroll event. */
@@ -14,6 +20,10 @@ export type SessionMemoryState = {
     scrollHeight: number
     clientHeight: number
   }
+  /** Row the reader was on when the position was last saved. */
+  restoreAnchor?: ViewportRestoreAnchor | null
+  /** True when the reader was at the end; re-entry then follows the end. */
+  restoreAtEnd?: boolean
   isStreaming: boolean
   streamStartTime?: number
   lastAccessedAt: number
@@ -34,7 +44,12 @@ export type ViewportState = {
   sessionMemoryState: Map<string, SessionMemoryState>
   isSyncing: boolean
 
-  updateViewportAnchor: (sessionId: string, anchor: number, scrollPosition?: SessionMemoryState['scrollPosition']) => void
+  updateViewportAnchor: (
+    sessionId: string,
+    anchor: number,
+    scrollPosition?: SessionMemoryState['scrollPosition'],
+    restore?: { anchor: ViewportRestoreAnchor | null; atEnd: boolean },
+  ) => void
 }
 
 export const viewportSessionKey = (sessionId: string, runtimeKey = getRuntimeKey()): string => `${runtimeKey}\n${sessionId}`
@@ -48,7 +63,7 @@ export const useViewportStore = create<ViewportState>()((set) => ({
   sessionMemoryState: new Map(),
   isSyncing: false,
 
-  updateViewportAnchor: (sessionId, anchor, scrollPosition) =>
+  updateViewportAnchor: (sessionId, anchor, scrollPosition, restore) =>
     set((s) => {
       const map = new Map(s.sessionMemoryState)
       const key = viewportSessionKey(sessionId)
@@ -58,12 +73,19 @@ export const useViewportStore = create<ViewportState>()((set) => ({
         lastAccessedAt: Date.now(),
         backgroundMessageCount: 0,
       }
-      map.set(key, {
+      const next: SessionMemoryState = {
         ...existing,
         viewportAnchor: anchor,
-        ...(scrollPosition ? { scrollPosition } : {}),
         lastAccessedAt: Date.now(),
-      })
+      }
+      if (scrollPosition) {
+        next.scrollPosition = scrollPosition
+      }
+      if (restore) {
+        next.restoreAnchor = restore.anchor
+        next.restoreAtEnd = restore.atEnd
+      }
+      map.set(key, next)
       return { sessionMemoryState: map }
     }),
 }))

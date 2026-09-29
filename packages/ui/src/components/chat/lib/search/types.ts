@@ -6,14 +6,11 @@
  * part identity the highlight layer uses to place it back in the DOM.
  */
 
-export type ChatFindMatchKind = 'text' | 'reasoning' | 'tool';
-
 export type ChatFindMatch = {
   /** Stable identity across re-indexing: message + chunk + occurrence. */
   key: string;
   messageId: string;
   partId?: string;
-  kind: ChatFindMatchKind;
   /** Ordinal of this occurrence inside its chunk. */
   occurrence: number;
   start: number;
@@ -24,7 +21,6 @@ export type ChatFindSearchableChunk = {
   /** Ordinal inside its message; part of the match key. */
   index: number;
   partId?: string;
-  kind: ChatFindMatchKind;
   text: string;
 };
 

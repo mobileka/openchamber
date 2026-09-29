@@ -18,17 +18,11 @@ import { normalizePath } from '@/lib/pathNormalization';
 export type ChatFindSettings = {
   caseSensitive: boolean;
   wholeWord: boolean;
-  includeReasoning: boolean;
-  includeTools: boolean;
-  includeWholeHistory: boolean;
 };
 
 export const DEFAULT_CHAT_FIND_SETTINGS: ChatFindSettings = {
   caseSensitive: false,
   wholeWord: false,
-  includeReasoning: false,
-  includeTools: false,
-  includeWholeHistory: false,
 };
 
 /** The live search run for one session; `null` means the bar is closed. */

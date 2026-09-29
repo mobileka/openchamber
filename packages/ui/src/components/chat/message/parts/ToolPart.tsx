@@ -2127,7 +2127,7 @@ const ToolPartContent: React.FC<ToolPartProps> = ({
     }
 
     return (
-        <div data-part-id={part.id}>
+        <div>
             {}
             <div
                 className={cn(

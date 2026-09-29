@@ -60,33 +60,22 @@ const entry = (info: ChatMessageEntry['info'], parts: Part[]): ChatMessageEntry 
 describe('extractSearchableChunks', () => {
   test('extracts user and assistant text parts', () => {
     const message = entry(assistantMessage('a1'), [textPart('p1', 'Hello world')]);
-    expect(extractSearchableChunks(message, { includeReasoning: false, includeTools: false })).toEqual([
-      { index: 0, partId: 'p1', kind: 'text', text: 'Hello world' },
+    expect(extractSearchableChunks(message)).toEqual([
+      { index: 0, partId: 'p1', text: 'Hello world' },
     ]);
   });
 
   test('skips empty text parts', () => {
     const message = entry(assistantMessage('a1'), [textPart('p1', '   ')]);
-    expect(extractSearchableChunks(message, { includeReasoning: false, includeTools: false })).toEqual([]);
+    expect(extractSearchableChunks(message)).toEqual([]);
   });
 
-  test('excludes reasoning unless asked for', () => {
-    const message = entry(assistantMessage('a1'), [reasoningPart('r1', 'secret plan')]);
-    expect(extractSearchableChunks(message, { includeReasoning: false, includeTools: false })).toEqual([]);
-    expect(extractSearchableChunks(message, { includeReasoning: true, includeTools: false })).toEqual([
-      { index: 0, partId: 'r1', kind: 'reasoning', text: 'secret plan' },
+  test('skips reasoning and tool parts', () => {
+    const message = entry(assistantMessage('a1'), [
+      reasoningPart('r1', 'secret plan'),
+      toolPart('t1', 'file-a\nfile-b'),
     ]);
-  });
-
-  test('excludes tools unless asked for, then includes description, input, and output', () => {
-    const message = entry(assistantMessage('a1'), [toolPart('t1', 'file-a\nfile-b')]);
-    expect(extractSearchableChunks(message, { includeReasoning: false, includeTools: false })).toEqual([]);
-    const chunks = extractSearchableChunks(message, { includeReasoning: false, includeTools: true });
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]?.kind).toBe('tool');
-    expect(chunks[0]?.text).toContain('shell');
-    expect(chunks[0]?.text).toContain('ls -la');
-    expect(chunks[0]?.text).toContain('file-a');
+    expect(extractSearchableChunks(message)).toEqual([]);
   });
 
   test('reads user context payloads from text parts', () => {
@@ -102,7 +91,7 @@ describe('extractSearchableChunks', () => {
         },
       }),
     ]);
-    const chunks = extractSearchableChunks(message, { includeReasoning: false, includeTools: false });
+    const chunks = extractSearchableChunks(message);
     expect(chunks).toHaveLength(1);
     expect(chunks[0]?.text).toContain('const answer = 42;');
     expect(chunks[0]?.text).toContain('why is this here');
@@ -128,7 +117,7 @@ describe('buildSearchableMessages', () => {
         [textPart('p3', 'compacted summary text')],
       ),
     ];
-    const searchable = buildSearchableMessages(messages, { includeReasoning: false, includeTools: false });
+    const searchable = buildSearchableMessages(messages);
     expect(searchable.map((message) => message.messageId)).toEqual(['u1', 'a1']);
   });
 
@@ -137,7 +126,7 @@ describe('buildSearchableMessages', () => {
       entry(userMessage('u1'), [textPart('p1', 'old prompt')]),
       entry(userMessage('u1'), [textPart('p1', 'new prompt')]),
     ];
-    const searchable = buildSearchableMessages(messages, { includeReasoning: false, includeTools: false });
+    const searchable = buildSearchableMessages(messages);
     expect(searchable).toHaveLength(1);
     expect(searchable[0]?.chunks[0]?.text).toBe('new prompt');
   });
@@ -164,7 +153,7 @@ describe('buildSearchableMessages', () => {
       [],
     );
     const messages: ChatMessageEntry[] = [synthetic, entry(userMessage('u1'), [textPart('p1', 'look at this')])];
-    const searchable = buildSearchableMessages(messages, { includeReasoning: false, includeTools: false });
+    const searchable = buildSearchableMessages(messages);
     expect(searchable).toHaveLength(1);
     expect(searchable[0]?.messageId).toBe('u1');
     const joined = searchable[0]?.chunks.map((chunk) => chunk.text).join('\n') ?? '';

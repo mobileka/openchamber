@@ -11,7 +11,7 @@
  * This layer also owns the current match's position. Navigation only brings a
  * missing row into the rendered window and releases auto-follow; the layer
  * centers the match's own range and keeps re-centering through the mount and
- * reflow that follow (a collapsed part expanding, virtualizer measurement,
+ * reflow that follow (a collapsed turn expanding, virtualizer measurement,
  * streaming), until the reader takes over the scroll.
  *
  * Highlight names are shared across columns (`oc-chat-find`,
@@ -104,8 +104,6 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
     sessionId: null,
     key: null,
   });
-  /** True from a session switch until the reader picks a match themselves. */
-  const sessionHoldRef = React.useRef(false);
   /** True once the reader scrolls the transcript, so find stops following. */
   const userScrolledRef = React.useRef(false);
 
@@ -134,9 +132,8 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       paint(CURRENT_HIGHLIGHT, [], 1);
       if (!isOpen) {
         // Remember the session so the first query typed after opening can
-        // center its match, while a genuine session switch still holds off.
+        // center its match.
         revealedRef.current = { sessionId, key: null };
-        sessionHoldRef.current = false;
       }
       return;
     }
@@ -203,8 +200,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       }
       if (currentMatch.partId) {
         const partId = CSS.escape(currentMatch.partId);
-        const partRoot = messageElement.querySelector(`[data-part-id="${partId}"]`)
-          ?? messageElement.querySelector(`[data-part-ids~="${partId}"]`);
+        const partRoot = messageElement.querySelector(`[data-part-id="${partId}"]`);
         if (partRoot) {
           const partRanges = findTextMatches(partRoot.textContent ?? '', normalizedQuery, options);
           const candidate = partRanges[currentMatch.occurrence] ?? partRanges[0];
@@ -245,7 +241,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       revealFrame = null;
       const match = currentMatch;
       const key = match?.key ?? null;
-      if (!match || !key || userScrolledRef.current || sessionHoldRef.current) {
+      if (!match || !key || userScrolledRef.current) {
         stopReveal();
         return;
       }
@@ -267,7 +263,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       if (range) {
         const rect = range.getBoundingClientRect();
         if (rect.width === 0 && rect.height === 0) {
-          // Hidden content (a collapsed part): the reveal request will mount
+          // Hidden content (a collapsed turn): the reveal request will mount
           // it, keep the loop alive for that. Until then, at least keep the
           // message itself in sight.
           revealRange = null;
@@ -361,12 +357,16 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
 
       const key = currentMatch?.key ?? null;
       if (revealedRef.current.sessionId !== sessionId) {
-        // A parked run restored after a session switch must not pull the
-        // viewport away from the reader's remembered position.
+        // Returning to a session with a parked search puts the reader back on
+        // the match they were on before leaving; a restored run without a
+        // current match leaves the timeline's own viewport restore in charge.
         revealedRef.current = { sessionId, key };
-        sessionHoldRef.current = true;
         userScrolledRef.current = false;
-        stopReveal();
+        if (key) {
+          startReveal();
+        } else {
+          stopReveal();
+        }
         return;
       }
       if (!key) {
@@ -375,16 +375,15 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       }
       if (revealedRef.current.key !== key) {
         // A new match always gets positioned, even when already on screen, so
-        // stepping reads as movement. It also ends any previous hold.
-        sessionHoldRef.current = false;
+        // stepping reads as movement.
         userScrolledRef.current = false;
         startReveal();
         return;
       }
-      if (sessionHoldRef.current || userScrolledRef.current) {
+      if (userScrolledRef.current) {
         return;
       }
-      // Rows can reflow after the reveal settled (a collapsed part expands,
+      // Rows can reflow after the reveal settled (a collapsed turn expands,
       // streaming rewrites); keep the match in sight until the reader scrolls.
       const range = currentRanges[0] ?? null;
       if (range && !isRangeInBand(range)) {

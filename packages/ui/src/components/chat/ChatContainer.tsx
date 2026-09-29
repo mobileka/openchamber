@@ -46,12 +46,12 @@ import { ChatFindBar } from './components/ChatFindBar';
 import { ChatFindHighlightLayer } from './message/ChatFindHighlightLayer';
 import { useChatFind } from './hooks/useChatFind';
 import { ChatFindContext, type ChatFindApi } from './chatFindContext';
-import { requestChatFindPartReveal, requestChatFindTurnReveal } from './lib/chatFindReveal';
+import { requestChatFindTurnReveal } from './lib/chatFindReveal';
 import type { ChatFindMatch } from './lib/search/types';
 import { registerChatFindOwner } from '@/lib/chatFindOwnership';
 import { useAuthSessionStore } from '@/lib/runtime-auth-expiry';
 import { useScrollShadow } from '@/components/ui/useScrollShadow';
-import { useChatTimelineScroll, type TimelineListHandle } from '@/hooks/useChatTimelineScroll';
+import { useChatTimelineScroll, type TimelineListHandle, type TimelineViewportMemory } from '@/hooks/useChatTimelineScroll';
 import { useChatTimelineController } from './hooks/useChatTimelineController';
 import { TimelineDialog } from './TimelineDialog';
 import { useChatTurnNavigation } from './hooks/useChatTurnNavigation';
@@ -790,7 +790,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
     // UI store
     const isExpandedInput = useUIStore((state) => state.isExpandedInput);
     const stickyUserHeader = useUIStore((state) => state.stickyUserHeader);
-    const showReasoningTraces = useUIStore((state) => state.showReasoningTraces);
     const promptNavigatorEnabled = useUIStore((state) => state.promptNavigatorEnabled);
     const allowPromptingSubagentSessions = useUIStore((state) => state.allowPromptingSubagentSessions);
     const [embeddedAllowPrompting, setEmbeddedAllowPrompting] = React.useState(initialAllowPromptingSubagentSessions);
@@ -1124,6 +1123,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         statusOverlayObserverRef.current?.disconnect();
         statusOverlayObserverRef.current = null;
     }, []);
+    // Filled in once the timeline controller exists; the scroll hook reads it
+    // when saving and restoring a session's remembered position.
+    const chatViewportMemoryRef = React.useRef<TimelineViewportMemory>({ capture: null, restore: null });
     const {
         scrollRef,
         scrollNode,
@@ -1147,6 +1149,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         composerOverlayHeight,
         sessionIsWorking,
         revealGate,
+        viewportMemory: chatViewportMemoryRef,
         onActiveTurnChange: handleActiveTurnChange,
     });
 
@@ -1165,6 +1168,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         isPinned,
         showScrollButton,
     });
+
+    // Row capture/restore for session re-entry. The scroll hook runs before the
+    // controller, so it reads these through the ref filled here.
+    chatViewportMemoryRef.current.capture = timelineController.captureViewportAnchor;
+    chatViewportMemoryRef.current.restore = timelineController.restoreViewportAnchor;
 
     const handleHistoryScroll = timelineController.handleHistoryScroll;
     React.useEffect(() => {
@@ -1235,11 +1243,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         if (turnId) {
             requestChatFindTurnReveal(turnId);
         }
-        if (match.partId && match.kind === 'tool') {
-            requestChatFindPartReveal(match.messageId, { kind: 'tool', partId: match.partId });
-        } else if (match.partId && match.kind === 'reasoning') {
-            requestChatFindPartReveal(match.messageId, { kind: 'reasoning', partId: match.partId });
-        }
         // The highlight layer centers the match's own range and keeps it in
         // view; this call only mounts a row that is outside the rendered
         // window and releases auto-follow, so it must not move a mounted row.
@@ -1262,7 +1265,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         activeTurnIndex,
         historyComplete: sessionMessageLoadState.complete,
         messageLoader,
-        reasoningVisible: showReasoningTraces,
         revealMatch: revealChatFindMatch,
     });
     const chatFindRef = React.useRef(chatFind);
@@ -1726,8 +1728,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
 				settings={chatFind.settings}
 				matchCount={chatFind.matches.length}
 				currentIndex={chatFind.currentIndex}
-				reasoningVisible={showReasoningTraces}
-				historyComplete={chatFind.historyComplete}
 				isSearchingHistory={chatFind.isSearchingHistory}
 				hasHistoryError={chatFind.hasHistoryError}
 				focusNonce={chatFindFocusNonce}

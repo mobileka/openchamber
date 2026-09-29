@@ -11,27 +11,27 @@ the per-session search state.
 The timeline is virtualized, so only message *data* can answer "how many
 matches". `chatSearchText.ts` extracts searchable chunks from the same display
 list the timeline renders (dedup, malformed parts dropped, synthetic context
-folded onto its user message, user/assistant roles only) and caches them per
-message identity. `chatSearchMatches.ts` turns a query into an ordered match
-list. The bar's count and stepping come from that list and never change
-because a row unmounted.
+folded onto its user message, user/assistant roles only, rendered text parts
+only) and caches them per message identity. `chatSearchMatches.ts` turns a
+query into an ordered match list. The bar's count and stepping come from that
+list and never change because a row unmounted. Reasoning blocks and tool cards
+are not indexed.
 
 `ChatFindHighlightLayer` paints what is mounted. It re-walks mounted message
 roots on every mutation, so a row mounting, streaming, or expanding brings its
 highlights in; requests without a mounted range still scroll. Stored text is
-raw (markdown, `> ` reasoning prefixes, ANSI); a counted match that markdown
-transforms out of the rendered text may resolve to no range — count and scroll
-stay honest, and the highlight is skipped rather than painted elsewhere.
+raw (markdown, ANSI); a counted match that markdown transforms out of the
+rendered text may resolve to no range — count and scroll stay honest, and the
+highlight is skipped rather than painted elsewhere.
 Highlight names are per column (`oc-chat-find-<id>`), and runtimes without
 `CSS.highlights` degrade to scroll-only.
 
 ## Reveal before paint
 
-A match inside collapsed content cannot be painted until the block mounts.
-Navigation calls `requestChatFindTurnReveal` / `requestChatFindPartReveal`:
-`MessageList` expands the turn's activity disclosure, `ChatMessage` expands the
-tool card or reasoning block. Requests survive until a consumer takes them, and
-part reveals notify only their message.
+A match inside a collapsed turn cannot be painted until the disclosure mounts.
+Navigation calls `requestChatFindTurnReveal`, and `MessageList` expands the
+turn's activity disclosure. Requests survive until a consumer takes them, so a
+request raised before the virtualized row mounts still applies when it does.
 
 Navigation asks the timeline for `align: 'keep'`: it only mounts a row that is
 outside the rendered window and releases auto-follow, never moving a mounted
@@ -40,7 +40,7 @@ assistant replies included, which the turn window model deliberately leaves
 unmapped — so the scroll is never gated on a message having a turn; the turn
 id only pins the rail indicator. `ChatFindHighlightLayer` owns the final
 position: on every new match it centers the match's own range in a bounded
-frame loop, retries while a collapsed part expands or a row mounts (asking the
+frame loop, retries while a collapsed turn expands or a row mounts (asking the
 timeline to mount the row again if it stays out of the window), and keeps the
 range between the find bar and the composer through the reflows that follow
 (streaming, virtualizer measurement). If a counted match never resolves to a
@@ -54,8 +54,8 @@ restore stays in charge.
 `useChatFindStore` owns two layers per session keyed by runtime + directory +
 session:
 
-- **settings** — the five toggles; stay with the session across bar close and
-  reopen, never shared between sessions;
+- **settings** — case and whole word; stay with the session across bar close
+  and reopen, never shared between sessions;
 - **run** — query, current match, whole-history error; `null` when the bar is
   closed, parked and restored when the reader switches sessions with the bar
   open. An empty message list is a load state, not a no-match result: the
@@ -69,13 +69,11 @@ Entries are removed when a session is deleted, archived, or disappears with
 its project or worktree (`cleanupPersistedSessionState`, the archive paths,
 `useProjectsStore.removeProject`, `removeProjectWorktree`).
 
-## Paged history
+## Whole history
 
-Without the whole-history toggle the bar says it searched loaded messages. With
-it checked, complete history loads through `SessionMessageLoader.loadComplete`
-and "no matches" is withheld until coverage is complete; failure shows an
-inline retry. The checkbox stays visible and is disabled with a hint once
-coverage is complete.
+Find always covers the whole conversation: opening the bar loads complete
+history through `SessionMessageLoader.loadComplete`, and "no matches" is
+withheld until coverage is complete; failure shows an inline retry.
 
 ## Shortcut
 

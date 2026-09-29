@@ -33,10 +33,9 @@ export const buildChatSearchMatches = (
           continue;
         }
         matches.push({
-          key: `${message.messageId}:${chunk.index}:${chunk.kind}:${occurrence}`,
+          key: `${message.messageId}:${chunk.index}:${occurrence}`,
           messageId: message.messageId,
           partId: chunk.partId,
-          kind: chunk.kind,
           occurrence,
           start: range.start,
           end: range.end,

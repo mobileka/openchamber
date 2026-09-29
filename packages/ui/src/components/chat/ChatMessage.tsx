@@ -42,11 +42,6 @@ import { setContextObligatoryMessage } from '@/sync/session-actions';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { focusChatInput } from './composer/editor/dom';
 import { isFileChangeTool, isShellTool } from '@/lib/opencode/tools';
-import {
-    getChatFindPartRevealVersion,
-    subscribeChatFindPartReveals,
-    takeChatFindPartReveals,
-} from './lib/chatFindReveal';
 
 const ToolOutputDialog = lazyWithChunkRecovery(() => import('./message/ToolOutputDialog'));
 
@@ -178,66 +173,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         setExpandedTools(readExpandedToolsCache(message.info.id));
         setCollapsedTools(readCollapsedToolsCache(message.info.id));
     }, [message.info.id]);
-
-    const [revealedPartIds, setRevealedPartIds] = React.useState<Set<string>>(() => new Set());
-    const findPartRevealVersion = React.useSyncExternalStore(
-        React.useCallback(
-            (listener) => subscribeChatFindPartReveals(message.info.id, listener),
-            [message.info.id],
-        ),
-        React.useCallback(() => getChatFindPartRevealVersion(message.info.id), [message.info.id]),
-        () => 0,
-    );
-
-    // Find navigation asks for collapsed blocks to expand before the highlight
-    // layer can paint a match inside them.
-    React.useEffect(() => {
-        const reveals = takeChatFindPartReveals(message.info.id);
-        if (reveals.length === 0) {
-            return;
-        }
-        const toolPartIds: string[] = [];
-        const reasoningPartIds: string[] = [];
-        for (const reveal of reveals) {
-            if (reveal.kind === 'tool') {
-                toolPartIds.push(reveal.partId);
-            } else {
-                reasoningPartIds.push(reveal.partId);
-            }
-        }
-        if (toolPartIds.length > 0) {
-            setExpandedTools((previous) => {
-                const next = new Set(previous);
-                for (const id of toolPartIds) {
-                    next.add(id);
-                }
-                writeExpandedToolsCache(message.info.id, next);
-                return next;
-            });
-            setCollapsedTools((previous) => {
-                if (!toolPartIds.some((id) => previous.has(id))) {
-                    return previous;
-                }
-                const next = new Set(previous);
-                for (const id of toolPartIds) {
-                    next.delete(id);
-                }
-                writeCollapsedToolsCache(message.info.id, next);
-                return next;
-            });
-        }
-        if (reasoningPartIds.length > 0) {
-            setRevealedPartIds((previous) => {
-                const next = new Set(previous);
-                for (const id of reasoningPartIds) {
-                    next.add(id);
-                }
-                return next;
-            });
-        }
-    }, [findPartRevealVersion, message.info.id]);
-
-
 
     const messageRole = React.useMemo(() => deriveMessageRole(message.info), [message.info]);
     const isUser = messageRole.isUser;
@@ -875,7 +810,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 onToggleContextPin={canPinIntoContext && messageCreatedAt ? handleToggleContextPin : undefined}
                                                 errorMessage={assistantErrorText}
                                                 userActionsMode={useExternalUserActionsRow ? 'external-content' : 'inline'}
-                                                revealedPartIds={revealedPartIds}
                                                 stickyUserHeaderEnabled={stickyUserHeader}
                                                 extraActions={guestMessageActions}
                                             />
@@ -911,7 +845,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                                 onToggleContextPin={canPinIntoContext && messageCreatedAt ? handleToggleContextPin : undefined}
                                                 errorMessage={assistantErrorText}
                                                 userActionsMode="external-actions"
-                                                revealedPartIds={revealedPartIds}
                                                 stickyUserHeaderEnabled={stickyUserHeader}
                                                 extraActions={guestMessageActions}
                                             />
@@ -952,7 +885,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
                                 agentMention={agentMention}
                                 turnGroupingContext={turnGroupingContext}
                                 errorMessage={assistantErrorText}
-                                revealedPartIds={revealedPartIds}
                                 reviewTransferDirection={reviewTransferDirection}
                                 footerProviderID={headerProviderID}
                                 footerModelName={headerModelName}

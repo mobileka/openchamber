@@ -3,9 +3,8 @@
  *
  * A full-width overlay pinned to the transcript's top, so opening it never
  * reflows the timeline. One search field holds the input and the two match
- * toggles (case, whole word) at its right edge; match count, stepping, and
- * close sit just outside it. The content and history checkboxes share the row
- * under the field and remain usable on touch surfaces.
+ * toggles (case, whole word) at its right edge; the match count, stepping, and
+ * close sit just outside it.
  *
  * The bar owns only presentation and local focus/keys: match counts, history
  * state, and selection live in `useChatFind`.
@@ -14,10 +13,8 @@
 import React from 'react';
 
 import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Icon } from '@/components/icon/Icon';
 import { Input } from '@/components/ui/input';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { ChatFindSettings } from '@/stores/useChatFindStore';
@@ -28,9 +25,6 @@ type ChatFindBarProps = {
   settings: ChatFindSettings;
   matchCount: number;
   currentIndex: number;
-  /** Whether the global Reasoning Traces setting renders reasoning at all. */
-  reasoningVisible: boolean;
-  historyComplete: boolean;
   isSearchingHistory: boolean;
   hasHistoryError: boolean;
   /** Bumped when the open shortcut is pressed again to re-focus the input. */
@@ -44,7 +38,6 @@ type ChatFindBarProps = {
   onRetryHistory: () => void;
 };
 
-const OPTION_LABEL_CLASS = 'flex cursor-pointer items-center gap-1.5 typography-micro text-muted-foreground';
 const TOGGLE_CLASS = 'h-6 min-w-7 shrink-0 px-1 normal-case';
 
 export const ChatFindBar: React.FC<ChatFindBarProps> = ({
@@ -53,8 +46,6 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
   settings,
   matchCount,
   currentIndex,
-  reasoningVisible,
-  historyComplete,
   isSearchingHistory,
   hasHistoryError,
   focusNonce,
@@ -132,29 +123,17 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
 
   const countLabel = matchCount > 0 ? `${currentIndex + 1}/${matchCount}` : '';
 
-  const wholeHistoryLabel = (
-    <label className={cn(OPTION_LABEL_CLASS, historyComplete && 'cursor-not-allowed opacity-60')}>
-      <Checkbox
-        checked={settings.includeWholeHistory}
-        disabled={historyComplete}
-        onChange={() => onToggleSetting('includeWholeHistory')}
-        ariaLabel={t('chat.find.includeWholeHistory')}
-      />
-      {t('chat.find.includeWholeHistory')}
-    </label>
-  );
-
   return (
     <div
       role="search"
       aria-label={t('chat.find.openAria')}
       className={cn(
-        'absolute inset-x-3 top-3 z-30 flex flex-col gap-1.5 rounded-xl border border-border/60 bg-[var(--surface-elevated)] p-1.5 shadow-lg',
+        'oc-chat-find-bar absolute inset-x-3 top-3 z-30 flex flex-col gap-1.5 rounded-xl border border-border/60 bg-[var(--surface-elevated)] p-1.5 shadow-lg',
         className,
       )}
     >
       <div className="flex items-center gap-1.5">
-        <div className="flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-[var(--surface-background)] px-2 ring-1 ring-inset ring-border/60 transition duration-200 ease-out focus-within:ring-2 focus-within:ring-[var(--interactive-focus-ring)]">
+        <div className="oc-chat-find-field flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg bg-[var(--surface-background)] px-2 ring-1 ring-inset ring-border/60 transition duration-200 ease-out focus-within:ring-2 focus-within:ring-[var(--interactive-focus-ring)]">
           <Icon name="search" className="size-3.5 shrink-0 text-muted-foreground" />
           <Input
             ref={inputRef}
@@ -234,36 +213,6 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
         </Button>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1">
-        <label className={cn(OPTION_LABEL_CLASS, !reasoningVisible && 'cursor-not-allowed opacity-60')}>
-          <Checkbox
-            checked={settings.includeReasoning}
-            disabled={!reasoningVisible}
-            onChange={() => onToggleSetting('includeReasoning')}
-            ariaLabel={reasoningVisible ? t('chat.find.includeReasoning') : t('chat.find.includeReasoningDisabled')}
-          />
-          {t('chat.find.includeReasoning')}
-        </label>
-        <label className={OPTION_LABEL_CLASS}>
-          <Checkbox
-            checked={settings.includeTools}
-            onChange={() => onToggleSetting('includeTools')}
-            ariaLabel={t('chat.find.includeTools')}
-          />
-          {t('chat.find.includeTools')}
-        </label>
-        {historyComplete ? (
-          <Tooltip>
-            <TooltipTrigger asChild>{wholeHistoryLabel}</TooltipTrigger>
-            <TooltipContent side="top" sideOffset={8}>
-              {t('chat.find.historyComplete')}
-            </TooltipContent>
-          </Tooltip>
-        ) : (
-          wholeHistoryLabel
-        )}
-      </div>
-
       {hasHistoryError ? (
         <div className="flex items-center gap-1 px-1 typography-micro text-[var(--status-error-text)]" role="status">
           <span>{t('chat.find.historyError')}</span>
@@ -276,12 +225,6 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
       {!hasHistoryError && trimmed.length > 0 && matchCount === 0 ? (
         <div className="px-1 typography-micro text-muted-foreground" role="status">
           {isSearchingHistory ? t('chat.find.searchingHistory') : t('chat.find.noMatches')}
-        </div>
-      ) : null}
-
-      {!hasHistoryError && !historyComplete && !settings.includeWholeHistory ? (
-        <div className="px-1 typography-micro text-muted-foreground/70" role="status">
-          {t('chat.find.loadedOnly')}
         </div>
       ) : null}
     </div>
