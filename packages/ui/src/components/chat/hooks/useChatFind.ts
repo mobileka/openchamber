@@ -23,8 +23,17 @@ import {
 } from '@/stores/useChatFindStore';
 
 import { clearChatFindReveals } from '../lib/chatFindReveal';
-import { buildChatSearchMatches, selectNearestMatchIndex } from '../lib/search/chatSearchMatches';
-import { buildSearchableMessages } from '../lib/search/chatSearchText';
+import {
+  buildChatSearchMatchesIncremental,
+  createChatFindMatchesCache,
+  selectNearestMatchIndex,
+  type ChatFindMatchesCache,
+} from '../lib/search/chatSearchMatches';
+import {
+  buildSearchableMessagesIncremental,
+  createChatFindSearchableMessagesCache,
+  type ChatFindSearchableMessagesCache,
+} from '../lib/search/chatSearchText';
 import type { ChatFindMatch } from '../lib/search/types';
 import type { ChatMessageEntry } from '../lib/turns/types';
 
@@ -97,23 +106,33 @@ export const useChatFind = (options: UseChatFindOptions): ChatFindController => 
   const run = entry?.run ?? null;
   const isOpen = run !== null;
 
+  // Both indexes are incremental and owned by this hook instance, so each
+  // split-view column keeps its own caches and a sync delta pays for the
+  // changed message plus a pointer-level reassembly, not a full chunk rescan.
+  const searchableCacheRef = React.useRef<ChatFindSearchableMessagesCache | null>(null);
+  const matchesCacheRef = React.useRef<ChatFindMatchesCache | null>(null);
+
   // Extraction is skipped entirely while the bar is closed so a hidden find
   // surface performs no ongoing work on streaming updates.
-  const searchableMessages = React.useMemo(
-    () => (isOpen ? buildSearchableMessages(options.messages) : []),
-    [isOpen, options.messages],
-  );
+  const searchableMessages = React.useMemo(() => {
+    if (!isOpen) {
+      return [];
+    }
+    searchableCacheRef.current ??= createChatFindSearchableMessagesCache();
+    return buildSearchableMessagesIncremental(searchableCacheRef.current, options.messages);
+  }, [isOpen, options.messages]);
 
   const query = run?.query ?? '';
-  const matches = React.useMemo(
-    () => (isOpen
-      ? buildChatSearchMatches(searchableMessages, query, {
-          caseSensitive: settings.caseSensitive,
-          wholeWord: settings.wholeWord,
-        })
-      : EMPTY_MATCHES),
-    [isOpen, query, searchableMessages, settings.caseSensitive, settings.wholeWord],
-  );
+  const matches = React.useMemo(() => {
+    if (!isOpen) {
+      return EMPTY_MATCHES;
+    }
+    matchesCacheRef.current ??= createChatFindMatchesCache();
+    return buildChatSearchMatchesIncremental(matchesCacheRef.current, searchableMessages, query, {
+      caseSensitive: settings.caseSensitive,
+      wholeWord: settings.wholeWord,
+    });
+  }, [isOpen, query, searchableMessages, settings.caseSensitive, settings.wholeWord]);
 
   const matchesRef = React.useRef(matches);
   matchesRef.current = matches;

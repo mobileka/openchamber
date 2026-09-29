@@ -12,10 +12,29 @@ The timeline is virtualized, so only message *data* can answer "how many
 matches". `chatSearchText.ts` extracts searchable chunks from the same display
 list the timeline renders (dedup, malformed parts dropped, synthetic context
 folded onto its user message, user/assistant roles only, rendered text parts
-only) and caches them per message identity. `chatSearchMatches.ts` turns a
-query into an ordered match list. The bar's count and stepping come from that
-list and never change because a row unmounted. Reasoning blocks and tool cards
-are not indexed.
+only). `chatSearchMatches.ts` turns a query into an ordered match list. The
+bar's count and stepping come from that list and never change because a row
+unmounted. Reasoning blocks and tool cards are not indexed.
+
+Both stages are incremental, and a column's `useChatFind` owns one cache per
+stage, so split-view panes never share index state. The text builder keeps
+chunks and index wrappers in per-entry caches and returns the previous list
+when every entry is reference-identical. The match builder keeps each message's
+match objects while its chunk array is unchanged, so a streaming delta
+re-extracts and rescans only the message that changed and reassembles the flat
+list from cached pointers. A no-op sync event therefore leaves the match list
+untouched. A query or toggle change still recomputes everything; that is
+user-driven and costs one interaction. The non-incremental builders remain the
+reference paths.
+
+This makes the sync layer's identity contract load-bearing: an unchanged
+message keeps its entry object, and a changed message arrives as a new one.
+Under that contract, match keys, ordering, and counts are exactly what a full
+rebuild would produce. The per-message map is pruned when messages leave the
+list and cleared when the query signature changes, and both caches live and die
+with the hook instance, so memory stays bounded by the current searchable list.
+`chatSearch.bench.ts` records the per-delta measurement against the pre-change
+path.
 
 `ChatFindHighlightLayer` paints what is mounted. It re-walks mounted message
 roots on every mutation, so a row mounting, streaming, or expanding brings its
