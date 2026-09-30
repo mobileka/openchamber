@@ -12,7 +12,6 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import crypto from 'crypto';
 import http2 from 'node:http2';
-import { createOpenCodeClient } from './lib/openchamber-sessions/opencode-client.js';
 import { createUiAuth } from './lib/ui-auth/ui-auth.js';
 import { createTunnelAuth } from './lib/opencode/tunnel-auth.js';
 import { createManagedTunnelConfigRuntime } from './lib/tunnels/managed-config.js';
