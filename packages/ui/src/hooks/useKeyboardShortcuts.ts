@@ -45,6 +45,7 @@ import {
   invokeActiveSelectionAddToChat,
 } from '@/lib/addSelectionToChat';
 import { isIMECompositionEvent } from '@/lib/ime';
+import { closeAnyChatFind, openChatFindFromEvent } from '@/lib/chatFindOwnership';
 import { canUseDigitShortcut, hasActiveBtwComposer, hasOpenDropdown, isEditableEventTarget, shouldStopDropdownImeEscape } from './keyboard-shortcut-dom';
 
 const dropdownTargetSelector = [
@@ -154,6 +155,10 @@ export const useKeyboardShortcuts = () => {
     },
     open_timeline_dialog: () => {
       useUIStore.getState().setTimelineDialogOpen(true);
+    },
+    find_in_chat: (event) => {
+      if (!currentSessionId) return false;
+      return openChatFindFromEvent(event);
     },
     open_session_list: () => {
       const state = useUIStore.getState();
@@ -449,6 +454,11 @@ export const useKeyboardShortcuts = () => {
       if (state.isPromptNavigatorPanelOpen) {
         event.preventDefault();
         state.setPromptNavigatorPanelOpen(false);
+        resetAbortPriming();
+        return;
+      }
+      if (closeAnyChatFind()) {
+        event.preventDefault();
         resetAbortPriming();
         return;
       }

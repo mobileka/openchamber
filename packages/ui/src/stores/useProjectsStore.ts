@@ -13,6 +13,7 @@ import { useDirectoryStore } from './useDirectoryStore';
 import { streamDebugEnabled } from '@/stores/utils/streamDebug';
 import { PROJECT_COLORS } from '@/lib/projectMeta';
 import { useSessionUIStore } from '@/sync/session-ui-store';
+import { clearChatFindDirectoryState } from './useChatFindStore';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { getVSCodeBootstrapConfig } from '@/lib/vscodeBootstrap';
@@ -738,6 +739,7 @@ export const useProjectsStore = create<ProjectsStore>()(
 
       // Clean up worktree entries for the removed project
       if (project) {
+        clearChatFindDirectoryState(project.path);
         const normalizedPath = project.path.replace(/\\/g, '/').replace(/\/+$/, '') || '/';
         useSessionUIStore.setState((s) => {
           const next = new Map(s.availableWorktreesByProject);

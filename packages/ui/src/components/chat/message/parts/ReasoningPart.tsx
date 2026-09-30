@@ -117,6 +117,7 @@ export const ReasoningTimelineBlock: React.FC<ReasoningTimelineBlockProps> = ({
         ? canAutoExpand && expansion.expanded
         : expansion.expanded;
     const [shouldRenderExpandedContent, setShouldRenderExpandedContent] = React.useState(defaultExpanded === true || canAutoExpand);
+
     const contentId = React.useId();
     const contentRef = React.useRef<HTMLDivElement>(null);
     const contentAnimationRef = React.useRef<AnimationPlaybackControls | null>(null);

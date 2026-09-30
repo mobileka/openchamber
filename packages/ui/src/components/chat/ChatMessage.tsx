@@ -174,8 +174,6 @@ const ChatMessage: React.FC<ChatMessageProps> = ({
         setCollapsedTools(readCollapsedToolsCache(message.info.id));
     }, [message.info.id]);
 
-
-
     const messageRole = React.useMemo(() => deriveMessageRole(message.info), [message.info]);
     const isUser = messageRole.isUser;
     const chatSurfaceMode = useChatSurfaceMode();

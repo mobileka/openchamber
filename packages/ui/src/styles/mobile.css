@@ -72,6 +72,20 @@
     min-width: 0 !important;
   }
 
+  /* Find bar: the generic mobile touch-target minimums inflate the compact
+     field controls past their row and crowd the query out of the field. The
+     bar keeps its desktop control sizes; only the field rises to the mobile
+     input height so the 16px query text fits its ring. The generic rule above
+     carries three :not() qualifiers and out-specifies any plain selector, so
+     the reset needs !important, like the composer action buttons. */
+  :root.mobile-pointer:not(.desktop-runtime) .oc-chat-find-bar button {
+    min-height: 0 !important;
+    min-width: 0 !important;
+  }
+  :root.mobile-pointer:not(.desktop-runtime) .oc-chat-find-bar .oc-chat-find-field {
+    min-height: 2.25rem;
+  }
+
   /* Improve input field touch targets */
   :root.mobile-pointer:not(.desktop-runtime) input,
   :root.mobile-pointer:not(.desktop-runtime) textarea,

@@ -20,6 +20,7 @@ import type { GuestAttachItem } from '@/hooks/useGuestSurfaces';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { ModelControls } from '../../ModelControls';
+import { useChatFindApi } from '../../chatFindContext';
 import { ComposerActionButtons } from './ComposerActionButtons';
 import { ComposerAttachmentControls } from './ComposerAttachmentControls';
 import { FocusModeButton } from './FocusModeButton';
@@ -79,6 +80,7 @@ export interface ComposerFooterProps {
 
 export function ComposerFooter(props: ComposerFooterProps) {
     const { t } = useI18n();
+    const chatFind = useChatFindApi();
     const {
         isMobile,
         isVSCode,
@@ -124,6 +126,20 @@ export function ComposerFooter(props: ComposerFooterProps) {
         btwSelection,
     } = props;
 
+    // One button, two layouts (mobile and desktop footers).
+    const chatFindButton = chatFind?.canSearch ? (
+        <button
+            type="button"
+            className={cn(footerIconButtonClass, chatFind.isOpen && 'text-foreground')}
+            onClick={chatFind.open}
+            title={t('chat.find.openAria')}
+            aria-label={t('chat.find.openAria')}
+            aria-pressed={chatFind.isOpen}
+        >
+            <Icon name="search" className={cn(iconSizeClass)} />
+        </button>
+    ) : null;
+
     return (
         <div
             className={cn(
@@ -163,6 +179,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
                                 permissionAutoAcceptEnabled={permissionAutoAcceptEnabled}
                                 handlePermissionAutoAcceptToggle={onTogglePermissionAutoAccept}
                             />
+                            {chatFindButton}
                             {!isBtw ? <SessionGoalButton
                                 sessionId={currentSessionId}
                                 directory={directory}
@@ -235,6 +252,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
                             isExpandedInput={isExpandedInput}
                             onToggle={onToggleExpandedInput}
                         /> : null}
+                        {chatFindButton}
                         <PermissionAutoAcceptButton
                             footerIconButtonClass={footerIconButtonClass}
                             iconSizeClass={iconSizeClass}

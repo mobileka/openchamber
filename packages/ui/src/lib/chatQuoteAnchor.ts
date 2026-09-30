@@ -104,13 +104,17 @@ function collectTextNodes(node: Node, into: Text[]): Text[] {
     return into;
 }
 
-/** A live Range over the anchored fragment in `root`, or null when not found. */
-export function resolveChatQuoteAnchor(root: Element, anchor: ChatQuoteAnchor): Range | null {
-    const start = locateChatQuote(root.textContent ?? '', anchor);
-    if (start === null) return null;
-    const end = start + anchor.text.length;
+/**
+ * A live Range over `[start, end)` of `root`'s text stream (the concatenated
+ * data of every descendant Text node in document order). Shared by quote
+ * anchoring and chat find highlighting.
+ */
+export function rangeFromStreamOffsets(root: Node, start: number, end: number): Range | null {
+    if (start < 0 || end < start) return null;
+    const documentRef = root.ownerDocument;
+    if (!documentRef) return null;
 
-    const range = root.ownerDocument.createRange();
+    const range = documentRef.createRange();
     let offset = 0;
     let startSet = false;
     for (const node of collectTextNodes(root, [])) {
@@ -126,6 +130,13 @@ export function resolveChatQuoteAnchor(root: Element, anchor: ChatQuoteAnchor): 
         offset += length;
     }
     return null;
+}
+
+/** A live Range over the anchored fragment in `root`, or null when not found. */
+export function resolveChatQuoteAnchor(root: Element, anchor: ChatQuoteAnchor): Range | null {
+    const start = locateChatQuote(root.textContent ?? '', anchor);
+    if (start === null) return null;
+    return rangeFromStreamOffsets(root, start, start + anchor.text.length);
 }
 
 /** Anchor for a quote sent before anchors existed: its text, found only if unique. */

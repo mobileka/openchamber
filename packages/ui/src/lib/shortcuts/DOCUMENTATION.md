@@ -10,7 +10,7 @@ Do not add a component-level `window` or `document` keydown listener for an appl
 
 Configuration must not contain lookup functions, override resolution, event matching, registry state, or runtime handlers. Those concerns belong to the owning modules below. Keeping configuration declarative makes the complete shortcut inventory reviewable without reading execution code.
 
-Component interaction keys that are not application commands, such as list navigation or text editing, do not belong in the schema. Contextual application commands do belong there even when they are not customizable; `save_file` and `find_in_file` are examples.
+Component interaction keys that are not application commands, such as list navigation or text editing, do not belong in the schema. Contextual application commands do belong there even when they are not customizable; `save_file` and `find_in_file` are examples. `find_in_file` and `find_in_chat` intentionally share `mod+f`: the focused surface decides, each handler returns false outside its own scope, and the pair is whitelisted in `schema.test.ts` as a contextual share.
 
 # Module roles
 

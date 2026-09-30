@@ -139,6 +139,8 @@ finished with `stop`, so no tool patch is parsed while the turn streams.
 
 ### Message parts
 
+- Find navigation addresses text parts through `data-part-id`; `MessageList` expands the turn's activity disclosure for a match inside collapsed content. Keep the attribute on the same root the highlight layer resolves ranges in.
+
 - Assistant markdown treats raw HTML as inert visible text. The final generated
   HTML is sanitized as defense in depth, with script and style elements
   forbidden, so message content cannot inject active DOM or application-wide

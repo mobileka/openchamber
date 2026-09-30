@@ -92,6 +92,7 @@ IPC results if its endpoint changes while the read is pending.
 | `scripts/rebuild-native.mjs` | Rebuilds native modules against the Electron runtime |
 | `scripts/package.mjs` | Runs `electron-builder`, with unsigned Windows builds when signing env is missing |
 | `scripts/stage-release.mjs` | One-time bootstrap that stages the latest fork release for an app installed from local builds |
+| `scripts/stage-local-build.mjs` | Stages a locally built `.app` into the builds directory as a pending local update, refusing builds the updater would ignore |
 | `resources/` | Packaged web assets, icons, and macOS entitlements |
 
 ## Development
@@ -201,6 +202,8 @@ This channel exists because unsigned macOS builds cannot install through Squirre
 An app that predates this channel only reads `builds/state.json`, so the first release needs one bootstrap step after the workflow publishes it: run `bun run --cwd packages/electron stage:release`. The script resolves the builds directory from the `/Applications` symlink, stages the latest release, and the running app offers it within five seconds. After that first apply, releases flow through the dialog.
 
 The custom path assumes `/Applications/OpenChamber.app` is a symlink into the builds directory, matching the local build setup; a real bundle in `/Applications` fails with an actionable error instead of being replaced in place.
+
+To test a worktree build in the running app without publishing, build it with the personal workflow's steps and stage it with `bun run --cwd packages/electron stage:local`. The staged build must come from a different commit than the running app, or the updater ignores it; the script refuses such a build instead of writing an entry that can never apply.
 
 ### Updater End-to-End Fixture
 

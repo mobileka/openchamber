@@ -8,6 +8,8 @@ import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useKeybinds } from './useKeybind';
 import { hasActiveBtwComposer, isEditableEventTarget } from './keyboard-shortcut-dom';
+import { closeAnyChatFind, openChatFindFromEvent } from '@/lib/chatFindOwnership';
+import { isIMECompositionEvent } from '@/lib/ime';
 
 export const useMiniChatKeyboardShortcuts = () => {
   const openNewSessionDraft = useSessionUIStore((state) => state.openNewSessionDraft);
@@ -93,6 +95,7 @@ export const useMiniChatKeyboardShortcuts = () => {
     },
     cycle_favorite_model_forward: () => cycleFavoriteModel(1),
     cycle_favorite_model_backward: () => cycleFavoriteModel(-1),
+    find_in_chat: openChatFindFromEvent,
     toggle_dictation: () => {
       if (hasActiveBtwComposer()) return false;
       // Same event the main app dispatches; ComposerDictation listens for it.
@@ -123,13 +126,23 @@ export const useMiniChatKeyboardShortcuts = () => {
       if (dispatcher.consumeCapturedPrefixEvent(event)) return;
       if (dispatcher.dispatch(event)) event.preventDefault();
     };
+    const handleEscapeChatFind = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || isIMECompositionEvent(event)) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest('[role="dialog"], [role="menu"], [role="listbox"], [data-slot="dropdown-menu-content"], [data-slot="select-content"]')) {
+        return;
+      }
+      if (closeAnyChatFind()) event.preventDefault();
+    };
     const handleBlur = () => dispatcher.handleBlur();
 
     window.addEventListener('keydown', handleActivePrefixKeyDownCapture, true);
+    window.addEventListener('keydown', handleEscapeChatFind, true);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('blur', handleBlur);
     return () => {
       window.removeEventListener('keydown', handleActivePrefixKeyDownCapture, true);
+      window.removeEventListener('keydown', handleEscapeChatFind, true);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('blur', handleBlur);
     };

@@ -6,6 +6,7 @@ import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
 import { useInlineCommentDraftStore } from '@/stores/useInlineCommentDraftStore';
 import { useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore';
+import { clearChatFindSessionState } from '@/stores/useChatFindStore';
 
 export const cleanupPersistedSessionState = (identity: {
   runtimeKey: string;
@@ -29,4 +30,5 @@ export const cleanupPersistedSessionState = (identity: {
   if (inputHistoryIdentity) useInputHistoryStore.getState().clearSession(inputHistoryIdentity);
   const chatDraftIdentity = createChatDraftIdentity(identity.runtimeKey, identity.directory, identity.sessionId);
   if (chatDraftIdentity) clearChatDraft(chatDraftIdentity, true);
+  clearChatFindSessionState(identity.runtimeKey, identity.directory, identity.sessionId);
 };

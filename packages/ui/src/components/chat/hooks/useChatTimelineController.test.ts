@@ -263,3 +263,69 @@ describe('useChatTimelineController identity lifecycle', () => {
         }
     });
 });
+
+describe('useChatTimelineController message scrolling', () => {
+    test('scrolls an assistant message the turn window model cannot attribute to a turn', async () => {
+        const dom = installMinimalDom();
+        const root: Root = createRoot(dom.container);
+        const user: Message = { id: 'u1', sessionID: 'session', role: 'user', time: { created: 1 } };
+        // v2 assistant replies carry no parent, so the turn model maps only the
+        // user message. The message list still owns a display index for it.
+        const assistant: Message = {
+            id: 'a1', sessionID: 'session', role: 'assistant',
+            time: { created: 2 }, providerID: 'test', modelID: 'test', agent: 'build',
+        };
+        const messages: ChatMessageEntry[] = [
+            { info: user, parts: [] },
+            { info: assistant, parts: [] },
+        ];
+        const scrollCalls: Array<{ messageId: string; align: string | undefined }> = [];
+        const scrollRef = { current: null };
+        let scrollable = true;
+        const messageListHandle: MessageListHandle = {
+            scrollToTurnId: () => false,
+            scrollToMessageId: (messageId, options) => {
+                scrollCalls.push({ messageId, align: options?.align });
+                return scrollable;
+            },
+            captureViewportAnchor: () => null,
+            restoreViewportAnchor: () => false,
+            holdViewportAnchor: () => undefined,
+            isHistoryVirtualized: () => false,
+            scrollToBottom: () => undefined,
+        };
+        const messageListRef = { current: messageListHandle };
+        let controller!: UseChatTimelineControllerResult;
+        const Harness = () => {
+            controller = useChatTimelineController({
+                sessionId: 'session', sessionKey: 'runtime\n/repo\nsession', messages,
+                historyMeta: { limit: messages.length, complete: true, loading: false },
+                scrollRef, messageListRef, isPinned: false, showScrollButton: false,
+                loadMoreMessages: async () => undefined,
+                goToBottom: () => undefined, releaseAutoFollow: () => undefined,
+            });
+            return null;
+        };
+        try {
+            await act(async () => root.render(React.createElement(Harness)));
+            let resolved = false;
+            await act(async () => {
+                resolved = await controller.scrollToMessage('a1', { behavior: 'auto', align: 'keep' });
+            });
+            expect(resolved).toBe(true);
+            expect(scrollCalls).toEqual([{ messageId: 'a1', align: 'keep' }]);
+
+            // When the list cannot act on the request, the request ends
+            // instead of waiting for a render that cannot help.
+            scrollable = false;
+            let missed = true;
+            await act(async () => {
+                missed = await controller.scrollToMessage('a1', { behavior: 'auto', align: 'keep' });
+            });
+            expect(missed).toBe(false);
+        } finally {
+            await act(async () => root.unmount());
+            dom.restore();
+        }
+    });
+});

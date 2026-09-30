@@ -25,6 +25,11 @@ import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useSessionPartsForMessages } from '@/sync/sync-context';
 import type { ReviewTransferDirection } from '@/lib/reviewFlow';
 import { resolveTimelineIsAtEnd } from './lib/scroll/timelineScrollAnchoring';
+import {
+    getChatFindTurnRevealVersion,
+    subscribeChatFindTurnReveals,
+    takeChatFindTurnReveals,
+} from './lib/chatFindReveal';
 
 const EMPTY_STATIC_ENTRY_MESSAGES: ChatMessageEntry[] = [];
 const EMPTY_UNGROUPED_MESSAGE_IDS = new Set<string>();
@@ -144,7 +149,7 @@ interface MessageListProps {
 
 export interface MessageListHandle {
     scrollToTurnId: (turnId: string, options?: { behavior?: ScrollBehavior }) => boolean;
-    scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior }) => boolean;
+    scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' }) => boolean;
     captureViewportAnchor: () => { messageId: string; offsetTop: number } | null;
     restoreViewportAnchor: (anchor: { messageId: string; offsetTop: number }) => boolean;
     holdViewportAnchor: (anchor: { messageId: string; offsetTop: number }) => void;
@@ -1035,6 +1040,27 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
         setTurnUiStates(new Map());
     }, [activityRenderMode, sessionKey]);
 
+    // Find navigation into collapsed activity expands the owning turn.
+    const findTurnRevealVersion = React.useSyncExternalStore(
+        subscribeChatFindTurnReveals,
+        getChatFindTurnRevealVersion,
+        () => 0,
+    );
+    React.useEffect(() => {
+        const revealedTurnIds = takeChatFindTurnReveals();
+        if (revealedTurnIds.length === 0) {
+            return;
+        }
+        setTurnUiStates((previous) => {
+            const next = new Map(previous);
+            for (const turnId of revealedTurnIds) {
+                const current = next.get(turnId) ?? { isExpanded: defaultActivityExpanded };
+                next.set(turnId, { ...current, isExpanded: true });
+            }
+            return next;
+        });
+    }, [defaultActivityExpanded, findTurnRevealVersion]);
+
     const toggleTurnGroup = React.useCallback((turnId: string, mode: 'sorted' | 'live' = 'sorted') => {
         setTurnUiStates((previous) => {
             const next = new Map(previous);
@@ -1444,11 +1470,24 @@ const MessageList = React.forwardRef<MessageListHandle, MessageListProps>(({
                 return true;
             },
 
-            scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior }) => {
+            scrollToMessageId: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' }) => {
                 const behavior = options?.behavior ?? 'auto';
                 const index = messageIndexMap.get(messageId);
                 if (index === undefined) {
                     return false;
+                }
+
+                // Find navigation positions the match range itself: a mounted
+                // target is left exactly where it is (moving the message top
+                // would push a deep match out of view), and only a target
+                // outside the rendered window is teleported in.
+                if (options?.align === 'keep') {
+                    const container = resolveScrollContainer();
+                    const messageElement = container ? findMessageElement(messageId) : null;
+                    if (messageElement) {
+                        return true;
+                    }
+                    return scrollHistoryIndexIntoView(index);
                 }
 
                 const didScroll = scrollMessageElementIntoView(messageId, behavior)

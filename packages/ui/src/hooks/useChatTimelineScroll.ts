@@ -4,7 +4,7 @@ import { MessageFreshnessDetector } from '@/lib/messageFreshness';
 import { createScrollSpy } from '@/components/chat/lib/scroll/scrollSpy';
 import { createKeyboardFollowGlide, type KeyboardFollowGlide } from '@/components/chat/lib/scroll/keyboardFollowGlide';
 import { retireScrollContent } from '@/components/chat/lib/scroll/retireScrollContent';
-import { useViewportStore } from '@/sync/viewport-store';
+import { getViewportSessionMemory, useViewportStore } from '@/sync/viewport-store';
 import { useUIStore } from '@/stores/useUIStore';
 import type { TimelineRevealGate } from '@/components/chat/timelineRevealGate';
 import {
@@ -64,6 +64,16 @@ export interface TimelineListHandle {
     }) => unknown;
 }
 
+/**
+ * Row capture/restore for session re-entry, wired from the message list
+ * handle after the timeline controller exists. The scroll hook only saves
+ * what `capture` reports and replays it through `restore`.
+ */
+export type TimelineViewportMemory = {
+    capture: (() => { messageId: string; offsetTop: number } | null) | null;
+    restore: ((anchor: { messageId: string; offsetTop: number }) => boolean) | null;
+};
+
 interface UseChatTimelineScrollOptions {
     currentSessionId: string | null;
     currentSessionKey: string | null;
@@ -78,6 +88,8 @@ interface UseChatTimelineScrollOptions {
     // Reveal gate of the session being opened. Held until the viewport is
     // pinned to the end, so the session is never shown scrolled to the top.
     revealGate?: TimelineRevealGate | null;
+    /** Row capture/restore for returning to a session where it was left. */
+    viewportMemory?: { current: TimelineViewportMemory };
     onActiveTurnChange?: (turnId: string | null) => void;
 }
 
@@ -124,6 +136,7 @@ export const useChatTimelineScroll = ({
     composerOverlayHeight,
     sessionIsWorking,
     revealGate = null,
+    viewportMemory,
     onActiveTurnChange,
 }: UseChatTimelineScrollOptions): UseChatTimelineScrollResult => {
     const sessionIsWorkingRef = React.useRef(sessionIsWorking);
@@ -230,18 +243,29 @@ export const useChatTimelineScroll = ({
         }
         const pending = pendingSaveRef.current;
         if (!pending) return;
+        // A debounced save that lands after the reader switched sessions would
+        // read the next session's container: drop it instead of writing the
+        // wrong position onto the session they left.
+        if (pending.sessionId !== currentSessionIdRef.current) {
+            pendingSaveRef.current = null;
+            return;
+        }
         const container = scrollRef.current;
         if (!container) {
             pendingSaveRef.current = null;
             return;
         }
+        const restoreAnchor = viewportMemory?.current.capture?.() ?? null;
         updateViewportAnchor(pending.sessionId, pending.anchor, {
             scrollTop: container.scrollTop,
             scrollHeight: container.scrollHeight,
             clientHeight: container.clientHeight,
+        }, {
+            anchor: restoreAnchor,
+            atEnd: isAtEndRef.current,
         });
         pendingSaveRef.current = null;
-    }, [updateViewportAnchor]);
+    }, [updateViewportAnchor, viewportMemory]);
 
     const queueSave = React.useCallback(() => {
         const sessionId = currentSessionIdRef.current;
@@ -321,6 +345,25 @@ export const useChatTimelineScroll = ({
         const sessionKey = currentSessionKeyRef.current;
         if (!sessionKey) return false;
 
+        const sessionId = currentSessionIdRef.current;
+        const memory = sessionId ? getViewportSessionMemory(sessionId) : undefined;
+        const restoreAnchor = memory?.restoreAnchor ?? null;
+        if (restoreAnchor && memory?.restoreAtEnd === false) {
+            const restored = viewportMemory?.current.restore?.(restoreAnchor) ?? false;
+            if (restored) {
+                // The reader left this session mid-history: return them to the
+                // same row and keep auto-follow released until they opt back
+                // in by returning to the end themselves.
+                isAtEndRef.current = false;
+                modeRef.current = 'free-scrolling';
+                liveFollowGenerationRef.current = null;
+                setUserOwnsScroll(true);
+                setIsPinned(false);
+                scheduleShowScrollButton();
+                return true;
+            }
+        }
+
         // Entering a session always returns to the live edge. Late async growth
         // is handled by the list staying at the end, not by a timed hold.
         isAtEndRef.current = true;
@@ -330,7 +373,7 @@ export const useChatTimelineScroll = ({
         hideScrollButton();
         void listRef.current?.scrollToEnd({ animated: false });
         return false;
-    }, [hideScrollButton]);
+    }, [hideScrollButton, scheduleShowScrollButton, viewportMemory]);
 
     // ── list callbacks ──────────────────────────────────────────────────────
     const registerList = React.useCallback((list: TimelineListHandle | null) => {

@@ -42,9 +42,16 @@ import { SessionRecapNote } from '@/components/chat/SessionRecapSpacer';
 import { SessionErrorNotice } from '@/components/chat/SessionErrorNotice';
 import ScrollToBottomButton from './components/ScrollToBottomButton';
 import { PromptNavigatorRail } from './components/PromptNavigatorRail';
+import { ChatFindBar } from './components/ChatFindBar';
+import { ChatFindHighlightLayer } from './message/ChatFindHighlightLayer';
+import { useChatFind } from './hooks/useChatFind';
+import { ChatFindContext, type ChatFindApi } from './chatFindContext';
+import { requestChatFindTurnReveal } from './lib/chatFindReveal';
+import type { ChatFindMatch } from './lib/search/types';
+import { registerChatFindOwner } from '@/lib/chatFindOwnership';
 import { useAuthSessionStore } from '@/lib/runtime-auth-expiry';
 import { useScrollShadow } from '@/components/ui/useScrollShadow';
-import { useChatTimelineScroll, type TimelineListHandle } from '@/hooks/useChatTimelineScroll';
+import { useChatTimelineScroll, type TimelineListHandle, type TimelineViewportMemory } from '@/hooks/useChatTimelineScroll';
 import { useChatTimelineController } from './hooks/useChatTimelineController';
 import { TimelineDialog } from './TimelineDialog';
 import { useChatTurnNavigation } from './hooks/useChatTurnNavigation';
@@ -1005,7 +1012,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         setCurrentSession(parentSession.id, parentDirectory);
     }, [parentSession, setCurrentSession]);
 
-    const returnToParentButton = parentSession && !hideReturnToParent ? (
+    const showReturnToParent = Boolean(parentSession) && !hideReturnToParent;
+    const returnToParentButton = showReturnToParent && parentSession ? (
         <Button
             type="button"
             variant="outline"
@@ -1115,6 +1123,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         statusOverlayObserverRef.current?.disconnect();
         statusOverlayObserverRef.current = null;
     }, []);
+    // Filled in once the timeline controller exists; the scroll hook reads it
+    // when saving and restoring a session's remembered position.
+    const chatViewportMemoryRef = React.useRef<TimelineViewportMemory>({ capture: null, restore: null });
     const {
         scrollRef,
         scrollNode,
@@ -1138,6 +1149,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         composerOverlayHeight,
         sessionIsWorking,
         revealGate,
+        viewportMemory: chatViewportMemoryRef,
         onActiveTurnChange: handleActiveTurnChange,
     });
 
@@ -1156,6 +1168,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         isPinned,
         showScrollButton,
     });
+
+    // Row capture/restore for session re-entry. The scroll hook runs before the
+    // controller, so it reads these through the ref filled here.
+    chatViewportMemoryRef.current.capture = timelineController.captureViewportAnchor;
+    chatViewportMemoryRef.current.restore = timelineController.restoreViewportAnchor;
 
     const handleHistoryScroll = timelineController.handleHistoryScroll;
     React.useEffect(() => {
@@ -1206,6 +1223,80 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
         && !isDesktopExpandedInput
         && promptNavigatorEnabled
         && timelineController.turnIds.length >= 2;
+
+    // --- In-chat find ----------------------------------------------------
+    const chatFindScopeRef = React.useRef<HTMLDivElement | null>(null);
+    const chatFindColumnId = React.useId();
+    const [chatFindFocusNonce, setChatFindFocusNonce] = React.useState(0);
+
+    const messageToTurnIndex = timelineController.turnWindowModel.messageToTurnIndex;
+    const activeTurnIndex = React.useMemo(() => {
+        if (!timelineController.activeTurnId) {
+            return -1;
+        }
+        return timelineController.turnIds.indexOf(timelineController.activeTurnId);
+    }, [timelineController.activeTurnId, timelineController.turnIds]);
+
+    const revealChatFindMatch = React.useCallback((match: ChatFindMatch) => {
+        const turnIndex = timelineController.turnWindowModel.messageToTurnIndex.get(match.messageId);
+        const turnId = turnIndex !== undefined ? timelineController.turnIds[turnIndex] : undefined;
+        if (turnId) {
+            requestChatFindTurnReveal(turnId);
+        }
+        // The highlight layer centers the match's own range and keeps it in
+        // view; this call only mounts a row that is outside the rendered
+        // window and releases auto-follow, so it must not move a mounted row.
+        void timelineController.scrollToMessage(match.messageId, { behavior: 'auto', align: 'keep' });
+    }, [timelineController]);
+
+    // The layer retries while a target row mounts; keep the callback stable so
+    // it never restarts the layer's reveal effect.
+    const scrollToMessageRef = React.useRef(timelineController.scrollToMessage);
+    scrollToMessageRef.current = timelineController.scrollToMessage;
+    const mountChatFindMessage = React.useCallback((messageId: string) => {
+        void scrollToMessageRef.current(messageId, { behavior: 'auto', align: 'keep' });
+    }, []);
+
+    const chatFind = useChatFind({
+        sessionId: currentSessionId,
+        directory: effectiveSessionDirectory,
+        messages: sessionMessages,
+        messageToTurnIndex,
+        activeTurnIndex,
+        historyComplete: sessionMessageLoadState.complete,
+        messageLoader,
+        revealMatch: revealChatFindMatch,
+    });
+    const chatFindRef = React.useRef(chatFind);
+    chatFindRef.current = chatFind;
+    const openChatFind = React.useCallback(() => {
+        const controller = chatFindRef.current;
+        if (controller.isOpen) {
+            setChatFindFocusNonce((nonce) => nonce + 1);
+            return;
+        }
+        controller.open();
+    }, []);
+    const chatFindApi = React.useMemo<ChatFindApi>(() => ({
+        isOpen: chatFind.isOpen,
+        canSearch: Boolean(currentSessionId) && sessionMessages.length > 0,
+        open: openChatFind,
+    }), [chatFind.isOpen, currentSessionId, openChatFind, sessionMessages.length]);
+
+    React.useEffect(() => {
+        const element = chatFindScopeRef.current;
+        if (!element) {
+            return;
+        }
+        return registerChatFindOwner({
+            id: chatFindColumnId,
+            element,
+            isActive: () => Boolean(active && currentSessionId),
+            isOpen: () => chatFindRef.current.isOpen,
+            open: openChatFind,
+            closeActive: () => chatFindRef.current.close(),
+        });
+    }, [active, chatFindColumnId, currentSessionId, openChatFind]);
 
     React.useEffect(() => {
         if (!showPromptNavigator) {
@@ -1617,8 +1708,37 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
 			scrollNode={scrollNode}
 			scrollToMessage={timelineController.scrollToMessage}
 		/>
-		<div data-composer-bound className="relative flex min-w-0 flex-1 flex-col h-full bg-background">
+		<ChatFindHighlightLayer
+			scrollNode={scrollNode}
+			sessionId={currentSessionId}
+			isOpen={chatFind.isOpen}
+			query={chatFind.query}
+			caseSensitive={chatFind.settings.caseSensitive}
+			wholeWord={chatFind.settings.wholeWord}
+			matches={chatFind.matches}
+			currentMatch={chatFind.currentMatch}
+			onRequestMessageMount={mountChatFindMessage}
+		/>
+		<ChatFindContext.Provider value={chatFindApi}>
+		<div ref={chatFindScopeRef} data-chat-find-scope="" data-composer-bound className="relative flex min-w-0 flex-1 flex-col h-full bg-background">
 			{returnToParentButton}
+			<ChatFindBar
+				open={chatFind.isOpen}
+				query={chatFind.query}
+				settings={chatFind.settings}
+				matchCount={chatFind.matches.length}
+				currentIndex={chatFind.currentIndex}
+				isHistoryLoading={chatFind.isHistoryLoading}
+				hasHistoryError={chatFind.hasHistoryError}
+				focusNonce={chatFindFocusNonce}
+				className={showReturnToParent ? 'top-12' : undefined}
+				onChangeQuery={chatFind.setQuery}
+				onToggleSetting={chatFind.toggleSetting}
+				onNext={chatFind.goNext}
+				onPrevious={chatFind.goPrevious}
+				onClose={chatFind.close}
+				onRetryHistory={chatFind.retryHistory}
+			/>
 			{sessionSurface}
 
             <div
@@ -1737,6 +1857,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({
                 onLoadEarlier={handleLoadOlderClick}
             />
         </div>
+        </ChatFindContext.Provider>
         </ChatQuoteHighlightContext.Provider>
         </MobileCommentComposerContext.Provider>
         </ChatColumnSessionContext.Provider>

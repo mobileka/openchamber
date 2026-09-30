@@ -351,6 +351,17 @@ export const CommandPalette: React.FC = () => {
           }
         }),
       },
+      {
+        id: 'search-chat',
+        secondary: true,
+        title: t('commandPalette.item.searchInChat'),
+        icon: <Icon name="search" className="mr-2 h-4 w-4" />,
+        shortcutId: 'find_in_chat',
+        searchText: t('commandPalette.item.searchInChat'),
+        onSelect: run(() => {
+          shortcutRegistry.invoke('find_in_chat');
+        }),
+      },
     );
     if (!isVSCodeRuntime()) {
       list.push({
