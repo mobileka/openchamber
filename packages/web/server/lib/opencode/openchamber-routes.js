@@ -1,3 +1,5 @@
+import { publicEnterprisePolicy } from '../enterprise-mode.js';
+
 const SYSTEMD_SERVICE_UNIT_PATTERN = /^[A-Za-z0-9:_.@-]+\.service$/;
 
 // Written before a desktop restart is scheduled and consumed once by the next
@@ -96,6 +98,12 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
     const systemdServiceUnit = isForegroundService ? resolveSystemdServiceUnit(process.env) : null;
     return { storedOptions, launchMode, isForegroundService, systemdServiceUnit };
   };
+
+  // Whether an administrator turned on enterprise mode, and by which source.
+  // Pinned endpoints and keys never leave the server.
+  app.get('/api/openchamber/enterprise-policy', (_req, res) => {
+    res.json(publicEnterprisePolicy());
+  });
 
   app.get('/api/openchamber/update-check', async (req, res) => {
     try {

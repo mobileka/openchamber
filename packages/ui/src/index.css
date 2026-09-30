@@ -76,6 +76,36 @@ button,
   line-height: round(1.625em, 1px);
 }
 
+/* Resolve prose per paragraph, including plain-text fallbacks. Keep direction
+   off the message root: it also contains code, tables and their controls. */
+.markdown-content,
+.markdown-content :where(p, h1, h2, h3, h4, h5, h6, li, blockquote, td:not([align]), th:not([align]), div.whitespace-pre-wrap),
+.markdown-content details[data-md-details] > summary > span:last-child {
+  unicode-bidi: plaintext;
+  text-align: start;
+}
+
+/* Markdown's explicit column alignment still wins over automatic alignment. */
+.markdown-content :where(td[align], th[align]) {
+  unicode-bidi: plaintext;
+}
+
+/* A technical fragment is one LTR run, even inside an RTL list or quote. */
+.markdown-content :where(
+  pre, code, kbd, samp,
+  [data-component="markdown-code"],
+  [data-markdown="table-wrapper"],
+  [data-markdown="mermaid-block"],
+  .katex,
+  [data-openchamber-file-link="true"],
+  [data-openchamber-agent-mention="true"],
+  [data-skill-name]
+) {
+  direction: ltr;
+  unicode-bidi: isolate;
+  text-align: start;
+}
+
 /* Native selection uses the theme's selection pair. */
 .message-content-text::selection,
 .message-content-text ::selection,
@@ -279,6 +309,19 @@ div[data-chat-input-footer="true"] {
      variable inline (the hook-based chat scroller). Inline styles from the
      ScrollShadow component still override this. */
   --scroll-shadow-size: 48px;
+  /* The band at the scroller's end that floating chrome covers. The end fade
+     sits above it, so content dissolves before it reaches that chrome. */
+  --scroll-shadow-end-inset: 0px;
+}
+
+/* The chat composer floats over the transcript's tail (plus any panel docked
+   above it), and the working row sits in the gap the tail spacer leaves. While
+   a live reply outruns the follow glide, its newest lines land in that gap;
+   fading them out above the composer keeps the composer's top edge from
+   cutting a line in half. In flow (draft, expanded editor) the inset is unset
+   and the fade returns to the scroller's edge. */
+.chat-scroll {
+  --scroll-shadow-end-inset: calc(var(--chat-composer-inset, 0px) + var(--chat-floating-panel-clearance, 0px));
 }
 
 [data-scroll-shadow="true"][data-orientation="vertical"] {
@@ -296,16 +339,16 @@ div[data-chat-input-footer="true"] {
     transparent 0%,
     transparent var(--scroll-shadow-top-clear-size, 0px),
     #000 var(--scroll-shadow-top-size, var(--scroll-shadow-size)),
-    #000 calc(100% - var(--scroll-shadow-size)),
-    transparent 100%
+    #000 calc(100% - var(--scroll-shadow-end-inset) - var(--scroll-shadow-size)),
+    transparent calc(100% - var(--scroll-shadow-end-inset))
   );
   -webkit-mask-image: linear-gradient(
     to bottom,
     transparent 0%,
     transparent var(--scroll-shadow-top-clear-size, 0px),
     #000 var(--scroll-shadow-top-size, var(--scroll-shadow-size)),
-    #000 calc(100% - var(--scroll-shadow-size)),
-    transparent 100%
+    #000 calc(100% - var(--scroll-shadow-end-inset) - var(--scroll-shadow-size)),
+    transparent calc(100% - var(--scroll-shadow-end-inset))
   );
 }
 
@@ -346,14 +389,14 @@ div[data-chat-input-footer="true"] {
   mask-image: linear-gradient(
     to bottom,
     #000 0%,
-    #000 calc(100% - var(--scroll-shadow-size)),
-    transparent 100%
+    #000 calc(100% - var(--scroll-shadow-end-inset) - var(--scroll-shadow-size)),
+    transparent calc(100% - var(--scroll-shadow-end-inset))
   );
   -webkit-mask-image: linear-gradient(
     to bottom,
     #000 0%,
-    #000 calc(100% - var(--scroll-shadow-size)),
-    transparent 100%
+    #000 calc(100% - var(--scroll-shadow-end-inset) - var(--scroll-shadow-size)),
+    transparent calc(100% - var(--scroll-shadow-end-inset))
   );
 }
 
@@ -1074,6 +1117,13 @@ html:not(.dark) .chat-scroll {
   line-height: inherit;
 }
 
+/* Documents rendered with their raw HTML (the Files preview) lay images out
+   the way GitHub does: inline beside text and other badges, not one block per
+   line as Tailwind preflight makes them. */
+.markdown-content[data-markdown-html] img {
+  display: inline;
+}
+
 /* Block rhythm: every block carries the same margin on both sides, so the
    gap between any two neighbours is one paragraph spacing (margins collapse)
    and the first/last block of a message adds nothing. Tailwind preflight
@@ -1091,13 +1141,16 @@ html:not(.dark) .chat-scroll {
    element, so the message-level [&_.markdown-content>*:first-child]:mt-0 /
    [&_.markdown-content>*:last-child]:mb-0 nullifiers target the wrapper
    (where margin is ignored), not the block. Trim the outer blocks directly so
-   messages gain no extra space at the top or bottom. */
+   messages gain no extra space at the top or bottom. The last block is found
+   by the renderer's [data-md-last] marker, not [data-md-block]:last-child: a
+   structural pseudo-class in that position makes every append to <body> (each
+   tooltip and menu portal) restyle the whole app. */
 .markdown-content > [data-md-block]:first-child > :first-child,
 .markdown-content > :first-child:not([data-md-block]) {
   margin-top: 0;
 }
 
-.markdown-content > [data-md-block]:last-child > :last-child,
+.markdown-content > [data-md-last] > :last-child,
 .markdown-content > :last-child:not([data-md-block]) {
   margin-bottom: 0;
 }
@@ -1122,7 +1175,7 @@ html:not(.dark) .chat-scroll {
   margin-top: 0;
 }
 
-.form-markdown > .markdown-content > [data-md-block]:last-child > :last-child {
+.form-markdown > .markdown-content > [data-md-last] > :last-child {
   margin-bottom: 0;
 }
 
@@ -1275,8 +1328,8 @@ html:not(.dark) .chat-scroll {
 
 /* Markdown blockquote - use theme colors */
 .markdown-content blockquote {
-  border-left: 2px solid var(--markdown-blockquote-border, var(--border));
-  padding-left: 0.8rem;
+  border-inline-start: 2px solid var(--markdown-blockquote-border, var(--border));
+  padding-inline-start: 0.8rem;
   color: var(--markdown-blockquote, var(--muted-foreground));
 }
 

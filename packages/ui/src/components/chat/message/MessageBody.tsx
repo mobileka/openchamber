@@ -14,15 +14,20 @@ import { cn, capitalizeWords } from '@/lib/utils';
 import { isEmptyTextPart, extractTextContent } from './partUtils';
 import { FadeInOnReveal } from './FadeInOnReveal';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { SaveProjectPlanDialog } from '@/components/session/SaveProjectPlanDialog';
 import { ForkSessionDialog, type ForkSessionExecution } from '@/components/session/ForkSessionDialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ArrowsMerge } from '@/components/icons/ArrowsMerge';
 
 import { MarkdownImageGallery, SimpleMarkdownRenderer } from '../MarkdownRenderer';
+import { LongErrorText } from '../LongErrorText';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useUIStore } from '@/stores/useUIStore';
+import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
+import type { Session } from '@/lib/opencode/model';
+import { getMultiRunIdentity } from '@/lib/multirun/identity';
+import { openParallelComposer } from '@/lib/multirun/openParallelComposer';
+import { AskOtherModelsDialog } from '@/components/multirun/AskOtherModelsDialog';
 import { flattenAssistantTextParts, suggestPlanTitleFromText } from '@/lib/messages/messageText';
 import { MULTIRUN_EXECUTION_FORK_PROMPT_META_TEXT } from '@/lib/messages/executionMeta';
 import { useMessageTTS } from '@/hooks/useMessageTTS';
@@ -59,6 +64,7 @@ import {
 import { useProviderLogo } from '@/hooks/useProviderLogo';
 import { useAgentColors } from '@/hooks/useAgentColors';
 import { isCapacitorMobileApp } from '@/apps/mobileNativeChrome';
+import { shareFileFromNativeApp } from '@/lib/nativeFileShare';
 import { WorktreeRequiresGitRepositoryError } from '@/lib/worktrees/worktreeCreate';
 import { cloneMessageImageExportSource } from './imageExport';
 
@@ -73,13 +79,15 @@ const getDisplayFileName = (file: string): string => {
     return segments.at(-1) ?? file;
 };
 
+const CHANGED_FILE_CHIP_CLASS_NAME = 'inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border/30 bg-muted/30 px-2 py-1 text-xs text-muted-foreground';
+const CHANGED_FILE_CHIP_HOVER_CLASS_NAME = 'transition-colors hover:border-border/60 hover:bg-interactive-hover';
+const CHANGED_FILE_CHIP_STYLE = { lineHeight: 'round(1.35em, 1px)' };
+const CHANGED_FILE_CHIP_BUTTON_CLASS_NAME = 'inline-flex h-8 max-w-full cursor-pointer items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]';
+
 const TurnChangedFileChipContent = React.memo(({ file, interactive = false }: { file: TurnChangedFile; interactive?: boolean }) => (
     <span
-        className={cn(
-            'inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border/30 bg-muted/30 px-2 py-1 text-xs text-muted-foreground',
-            interactive && 'transition-colors hover:border-border/60 hover:bg-interactive-hover'
-        )}
-        style={{ lineHeight: 'round(1.35em, 1px)' }}
+        className={cn(CHANGED_FILE_CHIP_CLASS_NAME, interactive && CHANGED_FILE_CHIP_HOVER_CLASS_NAME)}
+        style={CHANGED_FILE_CHIP_STYLE}
     >
         <FileTypeIcon filePath={file.file} className="h-3.5 w-3.5 flex-shrink-0" />
         <span className="max-w-52 truncate text-foreground/80" title={file.file}>{getDisplayFileName(file.file)}</span>
@@ -104,7 +112,7 @@ const TurnChangedFilePillButton = React.memo(({
     return (
         <button
             type="button"
-            className="inline-flex h-8 max-w-full cursor-pointer items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]"
+            className={CHANGED_FILE_CHIP_BUTTON_CLASS_NAME}
             aria-label={t('chat.changedFiles.actions.openFileTitle', { path: file.file })}
             title={file.file}
             onClick={(event) => {
@@ -157,46 +165,57 @@ const InteractiveTurnChangedFilePills = React.memo(({ files }: { files: TurnChan
     );
 });
 
+const CHANGED_FILE_CHIP_LIMIT = 4;
+
+/**
+ * Past the limit one more chip reveals the rest in the row; while they show,
+ * the same chip at the row's end hides them again.
+ */
 const TurnChangedFilePills = React.memo(({ files, isInteractive }: { files?: TurnChangedFile[]; isInteractive: boolean }) => {
     const { t } = useI18n();
     const [expanded, setExpanded] = React.useState(false);
-    const triggerRef = React.useRef<HTMLButtonElement>(null);
+    const toggleRef = React.useRef<HTMLButtonElement>(null);
     React.useLayoutEffect(() => {
-        const trigger = triggerRef.current;
-        if (!expanded && trigger && trigger.ownerDocument.activeElement === trigger) {
+        const toggle = toggleRef.current;
+        if (!expanded && toggle && toggle.ownerDocument.activeElement === toggle) {
             // Keep the focused control visible after a long list shrinks.
-            trigger.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            toggle.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         }
     }, [expanded]);
     if (!files || files.length === 0) return null;
 
     const Pills = isInteractive ? InteractiveTurnChangedFilePills : StaticTurnChangedFilePills;
-    const visibleLimit = 4;
-    if (files.length <= visibleLimit) return <Pills files={files} />;
+    const hiddenCount = files.length - CHANGED_FILE_CHIP_LIMIT;
+    if (hiddenCount <= 0) return <Pills files={files} />;
 
+    const label = expanded
+        ? t('chat.changedFiles.actions.showFewer')
+        : t('chat.changedFiles.actions.otherFiles', { count: hiddenCount });
     return (
-        <Collapsible
-            className="contents"
-            open={expanded}
-            onOpenChange={(open) => {
-                if (!open) triggerRef.current?.focus({ preventScroll: true });
-                setExpanded(open);
-            }}
-        >
-            <Pills files={files.slice(0, visibleLimit)} />
-            <CollapsibleContent className={expanded ? 'contents transition-none' : 'hidden transition-none'}>
-                {expanded && <Pills files={files.slice(visibleLimit)} />}
-            </CollapsibleContent>
-            <CollapsibleTrigger
-                ref={triggerRef}
-                render={<Button variant="ghost" size="sm" />}
-                className="w-auto text-muted-foreground"
+        <>
+            <Pills files={expanded ? files : files.slice(0, CHANGED_FILE_CHIP_LIMIT)} />
+            <button
+                ref={toggleRef}
+                type="button"
+                className={CHANGED_FILE_CHIP_BUTTON_CLASS_NAME}
+                aria-expanded={expanded}
+                aria-label={label}
+                title={label}
+                onClick={(event) => {
+                    event.stopPropagation();
+                    setExpanded((value) => !value);
+                }}
             >
-                {expanded
-                    ? t('chat.changedFiles.actions.collapse')
-                    : t('chat.changedFiles.actions.showMore', { count: files.length - visibleLimit })}
-            </CollapsibleTrigger>
-        </Collapsible>
+                <span className={cn(CHANGED_FILE_CHIP_CLASS_NAME, CHANGED_FILE_CHIP_HOVER_CLASS_NAME)} style={CHANGED_FILE_CHIP_STYLE}>
+                    {expanded ? (
+                        // A text line tall, so the icon-only chip matches the file chips.
+                        <span className="inline-flex h-[round(1.35em,1px)] items-center">
+                            <Icon name="arrow-up-s" className="h-3.5 w-3.5" />
+                        </span>
+                    ) : `+${hiddenCount}`}
+                </span>
+            </button>
+        </>
     );
 });
 
@@ -1231,7 +1250,6 @@ const AssistantMessageBody = React.memo(({
     const createSessionFromAssistantMessage = useSessionUIStore((state) => state.createSessionFromAssistantMessage);
     const currentSessionId = useSessionUIStore((state) => state.currentSessionId);
     const getDirectoryForSession = useSessionUIStore((state) => state.getDirectoryForSession);
-    const openMultiRunLauncherWithPrompt = useUIStore((state) => state.openMultiRunLauncherWithPrompt);
     const projects = useProjectsStore((state) => state.projects);
     const effectiveDirectory = useEffectiveDirectory();
     const isReviewSessionView = reviewTransferDirection === 'review-to-original';
@@ -1381,10 +1399,24 @@ const AssistantMessageBody = React.memo(({
             }
 
             const prefilledPrompt = `${MULTIRUN_EXECUTION_FORK_PROMPT_META_TEXT}\n\n${assistantPlanText}`;
-            openMultiRunLauncherWithPrompt(prefilledPrompt);
+            openParallelComposer(prefilledPrompt);
         },
-        [assistantPlanText, openMultiRunLauncherWithPrompt]
+        [assistantPlanText]
     );
+
+    const [askOtherModelsSession, setAskOtherModelsSession] = React.useState<Session | null>(null);
+    const handleAskOtherModels = React.useCallback(() => {
+        if (!sessionId) return;
+        const session = useGlobalSessionsStore.getState().activeSessions.find((entry) => entry.id === sessionId);
+        if (!session) return;
+        // A lane is already part of a run: its overview is where more models join.
+        const identity = getMultiRunIdentity(session);
+        if (identity) {
+            useUIStore.getState().setRunOverviewKey(identity.key);
+            return;
+        }
+        setAskOtherModelsSession(session);
+    }, [sessionId]);
 
     const handleSaveAsPlanClick = React.useCallback(
         // Optional event: the footer's action sheet calls this without one.
@@ -1519,11 +1551,7 @@ const AssistantMessageBody = React.memo(({
                     }
                 } else if (isCapacitorMobileApp()) {
                     const blob = await fetch(dataUrl).then((response) => response.blob());
-                    const file = new File([blob], fileName, { type: blob.type || 'image/png' });
-                    if (!navigator.canShare?.({ files: [file] })) {
-                        throw new Error('Image sharing is unavailable in this mobile runtime');
-                    }
-                    await navigator.share({ files: [file] });
+                    await shareFileFromNativeApp(new File([blob], fileName, { type: blob.type || 'image/png' }));
                 } else {
                     const link = document.createElement('a');
                     link.download = fileName;
@@ -2227,6 +2255,12 @@ const AssistantMessageBody = React.memo(({
                             <Icon name="chat-new" className="h-3.5 w-3.5" />
                             {t('chat.messageBody.actions.startNewSession')}
                         </DropdownMenuItem>
+                        {canShowMultiRunAction && turnGroupingContext?.turnId ? (
+                            <DropdownMenuItem className="typography-meta" onSelect={handleAskOtherModels}>
+                                <ArrowsMerge className="h-3.5 w-3.5" />
+                                {t('chat.messageBody.actions.askOtherModels')}
+                            </DropdownMenuItem>
+                        ) : null}
                         {canShowMultiRunAction ? (
                             <DropdownMenuItem className="typography-meta" onSelect={handleForkMultiRun}>
                                 <ArrowsMerge className="h-3.5 w-3.5" />
@@ -2235,6 +2269,14 @@ const AssistantMessageBody = React.memo(({
                         ) : null}
                     </DropdownMenuContent>
                 </DropdownMenu>
+            ) : null}
+            {askOtherModelsSession && turnGroupingContext?.turnId ? (
+                <AskOtherModelsDialog
+                    session={askOtherModelsSession}
+                    turnUserMessageId={turnGroupingContext.turnId}
+                    open
+                    onOpenChange={(open) => { if (!open) setAskOtherModelsSession(null); }}
+                />
             ) : null}
         </>
     );
@@ -2283,12 +2325,16 @@ const AssistantMessageBody = React.memo(({
                                 <div className="flex items-center gap-3">
                                     <Icon name="information" className="size-4 shrink-0 text-[var(--status-info)]" />
                                     <div className="min-w-0 flex-1 break-words">
-                                        <SimpleMarkdownRenderer
-                                            content={errorMessage ?? ''}
-                                            onShowPopup={onShowPopup}
-                                            className="[&_.markdown-content>*:first-child]:mt-0 [&_.markdown-content>*:last-child]:mb-0"
-                                            enableFileReferences={false}
-                                        />
+                                        <LongErrorText text={errorMessage ?? ''}>
+                                            {(visibleText) => (
+                                                <SimpleMarkdownRenderer
+                                                    content={visibleText}
+                                                    onShowPopup={onShowPopup}
+                                                    className="[&_.markdown-content>*:first-child]:mt-0 [&_.markdown-content>*:last-child]:mb-0"
+                                                    enableFileReferences={false}
+                                                />
+                                            )}
+                                        </LongErrorText>
                                     </div>
                                 </div>
                             </div>

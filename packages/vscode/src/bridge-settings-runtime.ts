@@ -541,6 +541,10 @@ export const persistSettings = async (changes: Record<string, unknown>, ctx?: Br
     delete restChanges.sessionSuggestionEnabled;
   }
 
+  if ('sessionWorkEnabled' in restChanges && typeof restChanges.sessionWorkEnabled !== 'boolean') {
+    delete restChanges.sessionWorkEnabled;
+  }
+
   if ('sessionGoalEnabled' in restChanges && typeof restChanges.sessionGoalEnabled !== 'boolean') {
     delete restChanges.sessionGoalEnabled;
   }

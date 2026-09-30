@@ -70,6 +70,21 @@ Use this doc when you ask an agent to change tool/header/description behavior.
 
 ## Current important behavior
 
+### Bidirectional prose
+
+Shared chat CSS applies `unicode-bidi: plaintext` to prose blocks, including
+nested paragraphs, headings and table cells. Plain user text uses the same
+behavior across newlines. The message root does not select one direction for
+all its children. Code widgets, diagrams, math and technical references remain
+LTR isolates, including their controls.
+
+`markdown/decorate.ts` gives list items and blockquotes `dir="auto"` for marker
+and border placement. Paragraphs use CSS rather than their own `dir` attribute,
+so their text still participates in that parent direction. Each list item owns
+its logical gutter, allowing adjacent Arabic and English items. Inline code
+and code widgets have explicit LTR attributes so they do not choose the
+containing item's direction. Direction changes preserve source and copy text.
+
 ### Optional live history disclosure
 
 Activity Default is shared by the settings UI in both render modes. In live
@@ -134,7 +149,8 @@ shows its name alone. Every pill opens the turn diff: OpenCode 2 computes it on
 request (`GET /api/session/:id/diff`, `DiffView`'s "Last turn" scope) from the
 turn's start and end snapshots, merged per file, so it also covers a `write`
 result and the edits a `subagent` made in its child session, which the pills
-themselves cannot list. The list is projected once the last assistant message
+themselves cannot list. Past four pills the rest wait behind one `+N` pill
+that reveals them in the row; the same pill then hides them again. The list is projected once the last assistant message
 finished with `stop`, so no tool patch is parsed while the turn streams.
 
 ### Message parts
@@ -144,7 +160,10 @@ finished with `stop`, so no tool patch is parsed while the turn streams.
 - Assistant markdown treats raw HTML as inert visible text. The final generated
   HTML is sanitized as defense in depth, with script and style elements
   forbidden, so message content cannot inject active DOM or application-wide
-  CSS into any runtime surface. Safe custom application links go through the
+  CSS into any runtime surface. Link text goes through the same inline
+  renderer, so raw HTML inside `[...]` stays text too. Only the Files
+  Markdown preview opts into rendering raw HTML (`allowRawHtml`, see
+  `components/views/files/DOCUMENTATION.md`). Safe custom application links go through the
   app-link confirmation flow in every supported renderer, including VS Code.
 - Final assistant Markdown rendering is independent from image gallery
   extraction: gallery presence never changes the chat body. Assistant image

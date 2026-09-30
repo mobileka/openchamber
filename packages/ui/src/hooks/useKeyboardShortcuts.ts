@@ -183,7 +183,7 @@ export const useKeyboardShortcuts = () => {
         || state.isSessionSwitcherOpen
         || state.isAboutDialogOpen
         || state.isTimelineDialogOpen
-        || state.isMultiRunLauncherOpen
+        || state.runOverviewKey !== null
         || state.isImagePreviewOpen;
       if (
         !state.promptNavigatorEnabled
@@ -476,7 +476,7 @@ export const useKeyboardShortcuts = () => {
         || state.isHelpDialogOpen
         || state.isSessionSwitcherOpen
         || state.isAboutDialogOpen
-        || state.isMultiRunLauncherOpen
+        || state.runOverviewKey !== null
         || state.isImagePreviewOpen;
       if (
         hasOverlay

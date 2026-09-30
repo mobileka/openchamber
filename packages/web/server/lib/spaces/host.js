@@ -2,9 +2,9 @@
 // is off: the place, the manager, the dispatcher, the WebSocket forwarder, the session index
 // with the event connection of every space, and the hooks the rest of the server takes.
 //
-// `server/index.js` reads the switch once at start. While it is off this module is never
-// imported for its effect: no place, no manager, no route, no `docker`. A change of the switch
-// takes effect at the next start of the server.
+// `server/index.js` reads the switch at start and changes it live through the switch route.
+// While it is off this module is never imported for its effect: no place, no manager, no
+// route, no `docker`.
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -12,9 +12,19 @@ import path from 'node:path';
 
 import { z } from 'zod';
 
+import { createCodeIn } from './code-in.js';
+import { createCodeOut } from './code-out.js';
 import { createSpaceDispatcher } from './dispatcher.js';
+import { SpaceError } from './errors.js';
+import { createGatekeeperChannel } from './gatekeeper-channel.js';
+import { createHostGit } from './host-git.js';
+import { createSpaceJourney } from './journey.js';
+import { hashProjectDirectory } from './labels.js';
+import { spaceProjectPath } from './layout.js';
 import { createSpaceManager } from './manager.js';
+import { createSpaceRecords } from './space-records.js';
 import { createSpaceEventSources } from './space-events.js';
+import { createSpaceOpenCode } from './space-opencode.js';
 import { createSpaceSessionIndex, mergeSessionLists } from './space-sessions.js';
 import { createSpaceWebSocketForwarder } from './websocket.js';
 import { createDockerPlace } from './places/docker.js';
@@ -34,8 +44,51 @@ const SESSION_PAGE_LIMIT = 100;
 const SESSION_MAX_PAGES = 10;
 const SESSION_LIST_TIMEOUT_MS = 10_000;
 const MAX_SESSION_LIST_BYTES = 8 * 1024 * 1024;
+// The server inside restarts its OpenCode and answers once it is ready again, which on a slow
+// machine takes a while; past this the restart is reported as not answered.
+const RESTART_OPENCODE_TIMEOUT_MS = 180_000;
+const MAX_RESTART_ANSWER_BYTES = 64 * 1024;
+// A managed OpenCode that restarted; an external one answers `success` with no restart at all.
+const restartedSchema = z.object({ success: z.literal(true), requiresReload: z.literal(true) });
 // The cursor of a next page, as the server inside names it; anything else ends the read.
 const nextCursorSchema = z.string().min(1);
+
+// A body from inside, read up to a cap and never past it.
+const readBody = (response, cap) => new Promise((resolve, reject) => {
+  const chunks = [];
+  let size = 0;
+  response.on('data', (chunk) => {
+    size += chunk.length;
+    if (size > cap) { response.destroy(); reject(new Error(`the answer exceeds ${cap} bytes`)); return; }
+    chunks.push(chunk);
+  });
+  response.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+  response.on('error', reject);
+});
+
+/**
+ * Asks the server inside a space to restart the OpenCode it manages, the route its own settings
+ * use for that, over the dispatcher's `requestInside`. The answer comes from inside and is
+ * data: anything but a 200 that says OpenCode was restarted is a failure, and its text never
+ * travels further than a code.
+ */
+export const restartOpenCodeInside = async (requestInside, spaceId) => {
+  const response = await requestInside(spaceId, {
+    method: 'POST',
+    path: '/api/config/reload',
+    headers: { accept: 'application/json', 'content-length': '0' },
+    timeoutMs: RESTART_OPENCODE_TIMEOUT_MS,
+  });
+  let succeeded = false;
+  try {
+    succeeded = response.statusCode === 200 && restartedSchema.safeParse(JSON.parse(await readBody(response, MAX_RESTART_ANSWER_BYTES))).success;
+  } catch {
+    succeeded = false;
+  } finally {
+    response.destroy();
+  }
+  if (!succeeded) throw new SpaceError('opencode_restart_failed', `OpenCode inside the space did not restart (status ${response.statusCode}).`);
+};
 
 /**
  * The installation id that labels this host's spaces, so two installations that share a Docker
@@ -57,13 +110,25 @@ export function readOrCreateOwner(dataDir) {
 }
 
 /**
- * `dataDir` is the host's data directory and `dockerPath` the docker CLI to run. `place`
- * replaces the Docker place, for the tests; `runCommand` and `openCommandStream` are the two
- * ways this module starts a process, injectable for the same reason.
+ * `dataDir` is the host's data directory, `dockerPath` the docker CLI to run and `gitPath` the
+ * host git that moves code in and out, with `hostEnvironment` as its environment: git starts
+ * `docker exec` itself, so the PATH in it must find docker. `place` replaces the Docker place,
+ * for the tests; `runCommand` and `openCommandStream` are the two ways this module starts a
+ * process, injectable for the same reason. `listProjectDirectories` answers the host's registered
+ * project paths, so a space's project label can be resolved to the project it was made for;
+ * without it every space is marked as of an unknown project. `readIdleStop` and `saveIdleStop`
+ * read and keep the user's idle stop setting in the host's settings. `archive` is the chat archive
+ * of `space-archive.js`, which a delete saves the space's chats to; without it they go with it.
  */
 export function createSpacesHost({
   dataDir,
   dockerPath = 'docker',
+  gitPath = 'git',
+  hostEnvironment = process.env,
+  listProjectDirectories = async () => [],
+  readIdleStop,
+  saveIdleStop,
+  archive = null,
   runCommand = runCommandProcess,
   openCommandStream = openCommandStreamProcess,
   place = null,
@@ -83,54 +148,125 @@ export function createSpacesHost({
   registry.seal();
   const manager = createSpaceManager({ registry });
   const serverInside = createSpaceServerChannel({ exec: dockerPlace.exec });
+  const gatekeeper = createGatekeeperChannel({ exec: dockerPlace.exec });
+  const git = createHostGit({ runCommand, gitPath, environment: hostEnvironment });
+  const codeIn = createCodeIn({ git, place: dockerPlace });
+  const codeOut = createCodeOut({ git, place: dockerPlace });
+  const records = createSpaceRecords({ dataDir, logger });
 
-  const listSpaceIds = async () => (await manager.listSpaces({ placeId: dockerPlace.id })).map((space) => space.id);
+  const listSpaces = () => manager.listSpaces({ placeId: dockerPlace.id });
   const dispatcher = createSpaceDispatcher({
     logger,
     transport: {
-      listSpaceIds,
+      listSpaceIds: async () => (await listSpaces()).map((space) => space.id),
       connect: (spaceId) => dockerPlace.connect(spaceId),
       readToken: (spaceId) => serverInside.readToken(spaceId),
     },
   });
 
+  const spaceOpenCode = createSpaceOpenCode({ exec: dockerPlace.exec, requestInside: dispatcher.requestInside });
+
   const index = createSpaceSessionIndex({ logger });
   let events = null;
   let unsubscribeHostEvents = null;
   let followTimer = null;
-  let known = { ids: [], readAt: -Infinity };
+  let known = { spaces: [], readAt: -Infinity };
   let listing = null;
   // When each space's session list was last read; within the TTL the accepted list is served again.
   const listReadAt = new Map();
 
-  /** The ids of this host's spaces, read again when older than the TTL. A failed read keeps the last ones. */
-  const spaceIds = async () => {
-    if (now() - known.readAt < LIST_TTL_MS) return known.ids;
+  /**
+   * Which registered project a space was made for, by the label's hash of the project path. A
+   * failed read of the projects, or a project since removed, leaves the space with no project.
+   */
+  const resolveProjects = async (spaces) => {
+    if (spaces.length === 0) return new Map();
+    let directories = [];
+    try {
+      directories = await listProjectDirectories();
+    } catch (error) {
+      logger.warn?.(`[spaces] could not read the projects: ${error?.code ?? error?.message ?? error}`);
+    }
+    const byHash = new Map(directories.map((directory) => [hashProjectDirectory(directory), directory]));
+    return new Map(spaces.map((space) => [space.id, byHash.get(space.project) ?? null]));
+  };
+
+  /**
+   * This host's spaces, each with its name and the project it was made for, read again when
+   * older than the TTL. A failed read keeps the last ones.
+   */
+  const knownSpaces = async () => {
+    if (now() - known.readAt < LIST_TTL_MS) return known.spaces;
     if (!listing) {
-      listing = listSpaceIds()
-        .then((ids) => { known = { ids, readAt: now() }; })
+      listing = listSpaces()
+        .then(async (spaces) => {
+          const projects = await resolveProjects(spaces);
+          known = {
+            spaces: spaces.map((space) => {
+              const projectDirectory = projects.get(space.id) ?? null;
+              return {
+                id: space.id,
+                name: space.name,
+                projectDirectory,
+                directory: projectDirectory === null ? null : spaceProjectPath(space.id, projectDirectory),
+              };
+            }),
+            readAt: now(),
+          };
+        })
         .catch((error) => { logger.warn?.(`[spaces] could not list the spaces: ${error?.code ?? error?.message ?? error}`); })
         .finally(() => { listing = null; });
     }
     await listing;
-    return known.ids;
+    return known.spaces;
   };
+  const spaceIds = async () => (await knownSpaces()).map((space) => space.id);
 
   const follow = async () => {
     const ids = await spaceIds();
     events?.sync(ids);
   };
+  /** The list is read again at once, and the event connections follow it: for a space just made or removed. */
+  const refresh = () => {
+    known = { spaces: known.spaces, readAt: -Infinity };
+    return follow();
+  };
 
-  const readBody = (response, cap) => new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    response.on('data', (chunk) => {
-      size += chunk.length;
-      if (size > cap) { response.destroy(); reject(new Error(`the list exceeds ${cap} bytes`)); return; }
-      chunks.push(chunk);
-    });
-    response.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    response.on('error', reject);
+  let hub = null;
+  const journey = createSpaceJourney({
+    manager,
+    place: dockerPlace,
+    gatekeeper,
+    codeIn,
+    codeOut,
+    records,
+    spaceOpenCode,
+    serverInside,
+    restartOpenCodeInside: (spaceId) => restartOpenCodeInside(dispatcher.requestInside, spaceId),
+    listProjectDirectories,
+    archiveChats: archive ? ({ spaceId, name, projectDirectory, running, allowUnsaved }) => archive.saveChats({
+      spaceId,
+      name,
+      projectDirectory,
+      allowUnsaved,
+      source: {
+        // The space's own list, read whole; a stopped space that did not start has none to give.
+        listChats: async () => {
+          if (!running) throw new SpaceError('space_not_running', 'The space is not running');
+          const { records: chats, complete } = await readSpaceSessions(spaceId);
+          return { chats: chats.map((chat) => ({ id: chat?.id, title: chat?.title })), complete };
+        },
+        exportChat: (chatId) => spaceOpenCode.exportChat(spaceId, chatId),
+      },
+    }) : null,
+    // A key named by an environment variable is read from the host's own environment, now, and
+    // its value is kept nowhere (decision 5).
+    readHostSecret: (name) => hostEnvironment[name],
+    readIdleStop,
+    saveIdleStop,
+    announce: (spaceId, payload) => { hub?.injectEvent({ payload, directory: 'global', spaceId }); },
+    onSpacesChanged: () => { void refresh().catch(() => {}); },
+    logger,
   });
 
   /** One space's whole session list, page by page, or as much of it as the page cap allows. */
@@ -161,9 +297,9 @@ export function createSpacesHost({
   const mergeSessionList = async (hostPayload) => {
     const hostRecords = Array.isArray(hostPayload) ? hostPayload : hostPayload?.data;
     if (Array.isArray(hostRecords)) index.observeHostRecords(hostRecords);
-    const ids = await spaceIds();
-    if (ids.length === 0) return hostPayload;
-    await Promise.all(ids.map(async (spaceId) => {
+    const spaces = await knownSpaces();
+    if (spaces.length === 0) return hostPayload;
+    await Promise.all(spaces.map(async ({ id: spaceId }) => {
       if (now() - (listReadAt.get(spaceId) ?? -Infinity) < LIST_TTL_MS) return;
       try {
         const { records, complete } = await readSpaceSessions(spaceId);
@@ -175,8 +311,11 @@ export function createSpacesHost({
       }
     }));
     // In the place's order, so the merged list reads the same from one call to the next.
-    const known = new Map(index.snapshot().map((entry) => [entry.spaceId, entry]));
-    return mergeSessionLists(hostPayload, ids.map((spaceId) => known.get(spaceId)).filter((entry) => entry !== undefined));
+    const answers = new Map(index.snapshot().map((entry) => [entry.spaceId, entry]));
+    return mergeSessionLists(hostPayload, spaces.flatMap((space) => {
+      const answer = answers.get(space.id);
+      return answer === undefined ? [] : [{ ...answer, name: space.name, projectDirectory: space.projectDirectory, directory: space.directory }];
+    }));
   };
 
   let sockets = null;
@@ -185,15 +324,22 @@ export function createSpacesHost({
     manager,
     dispatcher,
     index,
-    /** Mounts the dispatcher: after the API auth gate, before every route that reads a directory. */
-    registerRoutes: (app) => { app.use(dispatcher.middleware); },
-    /** Takes the WebSocket upgrades under the prefix, with the host's own auth and origin checks. */
-    attachUpgrades: (server, { uiAuthController, isRequestOriginAllowed }) => {
+    journey,
+    /** The places a space can be made on, for the funnel. */
+    places: () => registry.list(),
+    /** The dispatcher, to mount after the API auth gate and before every route that reads a directory. */
+    middleware: dispatcher.middleware,
+    /**
+     * Makes the WebSocket forwarder, with the host's own auth and origin checks. `upgradeHandler`
+     * then takes the upgrades under the prefix, and nothing before this call.
+     */
+    prepareUpgrades: ({ uiAuthController, isRequestOriginAllowed }) => {
       sockets = createSpaceWebSocketForwarder({ dispatcher, connect: (spaceId) => dockerPlace.connect(spaceId), uiAuthController, isRequestOriginAllowed, logger });
-      server.on('upgrade', sockets.upgradeHandler);
     },
+    upgradeHandler: (...args) => sockets?.upgradeHandler(...args),
     /** Follows the spaces: an event connection for each, into the host's hub, and the host's own ids from its events. */
     startEvents: (globalEventHub) => {
+      hub = globalEventHub;
       events = createSpaceEventSources({ requestInside: dispatcher.requestInside, index, hub: globalEventHub, logger, now });
       unsubscribeHostEvents = globalEventHub.subscribeEvent((event) => { if (event.spaceId === null) index.observeHostEvent(event.payload); });
       followTimer = setTimer(() => { void follow(); }, FOLLOW_INTERVAL_MS);

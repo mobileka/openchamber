@@ -8,7 +8,10 @@ import path from 'node:path';
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createSpacesHost, readOrCreateOwner } from './host.js';
+import { Readable } from 'node:stream';
+
+import { createSpacesHost, readOrCreateOwner, restartOpenCodeInside } from './host.js';
+import { hashProjectDirectory } from './labels.js';
 import { createMemoryPlace } from './places/memory-place.js';
 
 const folders = [];
@@ -45,6 +48,37 @@ describe('readOrCreateOwner', () => {
   });
 });
 
+describe('restartOpenCodeInside', () => {
+  // The server inside, as the dispatcher hands back its answer: a status and a body to read.
+  const answering = (statusCode, body) => {
+    const asked = [];
+    const requestInside = async (spaceId, request) => {
+      asked.push({ spaceId, ...request });
+      return Object.assign(Readable.from([Buffer.from(body)]), { statusCode });
+    };
+    return { asked, requestInside };
+  };
+
+  it('asks the server inside for the reload its own settings use, and resolves when it says it succeeded', async () => {
+    const { asked, requestInside } = answering(200, JSON.stringify({ success: true, requiresReload: true }));
+    await restartOpenCodeInside(requestInside, 'a1b2c3d4e5f6');
+    expect(asked).toEqual([expect.objectContaining({ spaceId: 'a1b2c3d4e5f6', method: 'POST', path: '/api/config/reload' })]);
+  });
+
+  it.each([
+    ['an error status', 500, JSON.stringify({ success: false, error: 'boom' })],
+    ['a 200 that does not say it succeeded', 200, JSON.stringify({ success: 'yes' })],
+    ['an OpenCode it does not manage, which it did not restart', 200, JSON.stringify({ success: true, requiresReload: false, requiresManualRestart: true })],
+    ['a body that is not JSON', 200, 'restarted'],
+    ['a body past the cap', 200, JSON.stringify({ success: true, padding: 'x'.repeat(70 * 1024) })],
+  ])('reports %s as a failed restart, with no text from inside', async (_name, status, body) => {
+    const { requestInside } = answering(status, body);
+    const failure = await restartOpenCodeInside(requestInside, 'a1b2c3d4e5f6').catch((error) => error);
+    expect(failure).toMatchObject({ code: 'opencode_restart_failed' });
+    expect(failure.message).not.toContain('boom');
+  });
+});
+
 describe('createSpacesHost', () => {
   it('starts no process of its own when it is made, and answers through the place it was given', async () => {
     let started = 0;
@@ -60,7 +94,7 @@ describe('createSpacesHost', () => {
     const { id } = await host.manager.createSpace({ placeId: 'memory', projectDirectory: '/home/me/project', name: 'Host test' });
 
     const app = express();
-    host.registerRoutes(app);
+    app.use(host.middleware);
     app.get('/api/host', (req, res) => res.json({ directory: req.query.directory ?? null }));
     const server = http.createServer(app);
     servers.push(server);
@@ -84,6 +118,20 @@ describe('createSpacesHost', () => {
     expect(host.refuseDirectory('/home/me/spaces')).toBeNull();
     expect(started).toBe(0);
     await place.remove(id);
+  });
+
+  it('carries the journey and its places, and takes no upgrade before the forwarder is made', async () => {
+    const place = createMemoryPlace();
+    const host = createSpacesHost({ dataDir: temporary(), place, listProjectDirectories: async () => ['/home/me/project'], logger: { warn: () => {} } });
+    hosts.push(host);
+    expect(host.places().map((entry) => entry.id)).toEqual(['memory']);
+    expect(await host.journey.listSpaces()).toEqual([]);
+    // The slot in index.js calls this whether or not the forwarder exists yet.
+    expect(() => host.upgradeHandler({ url: '/api/spaces/a1b2c3d4e5f6/api/event/ws', headers: {} }, { destroy: () => {} }, Buffer.alloc(0))).not.toThrow();
+    // The middleware is the dispatcher's: a request outside the prefix passes through.
+    let passed = false;
+    host.middleware({ path: '/api/host', url: '/api/host', headers: {}, query: {}, method: 'GET' }, {}, () => { passed = true; });
+    expect(passed).toBe(true);
   });
 });
 
@@ -145,7 +193,7 @@ const fakePlace = (spaces) => ({
   id: 'fake',
   check: async () => ({ available: true }),
   create: async () => {},
-  list: async () => Array.from(spaces.entries(), ([id, space]) => ({ id, name: id, project: 'p', created: '', state: space.running ? 'running' : 'exited', orphans: [], damaged: false, missing: [] })),
+  list: async () => Array.from(spaces.entries(), ([id, space]) => ({ id, name: id, project: space.project ?? 'p', created: '', state: space.running ? 'running' : 'exited', orphans: [], damaged: false, missing: [] })),
   exec: async (_spaceId, argv) => (argv[0] === IMAGE_CAT ? { code: 0, stdout: `${TOKEN}\n`, stderr: '' } : { code: 127, stdout: '', stderr: 'not found' }),
   execArgv: async () => [],
   connect: async (spaceId) => {
@@ -176,10 +224,13 @@ describe('createSpacesHost: sessions and events', () => {
     // Two spaces that list the same id are read at the same time, so which one keeps it is not
     // fixed; that rule is proved in `space-sessions.test.js`, and here the two lists are apart.
     const second = await startSpaceServer({ sessions: [{ id: 'b1', location: { directory: `/spaces/${OTHER}/repo` } }] });
-    const spaces = new Map([[ID, { port: first.port, running: true }], [OTHER, { port: second.port, running: true }]]);
-    const host = createSpacesHost({ dataDir: temporary(), place: fakePlace(spaces), logger, setTimer: () => null, clearTimer: () => {} });
+    // The first space was made for a registered project, the second for one this host no longer has.
+    const spaces = new Map([[ID, { port: first.port, running: true, project: hashProjectDirectory('/home/me/project') }], [OTHER, { port: second.port, running: true }]]);
+    const host = createSpacesHost({ dataDir: temporary(), place: fakePlace(spaces), logger, setTimer: () => null, clearTimer: () => {}, listProjectDirectories: async () => ['/home/me/project', '/home/me/other'] });
     hosts.push(host);
     const hostList = { data: [{ id: 'host-1', location: { directory: '/home/me' } }], cursor: {} };
+    const first_mark = { id: ID, name: ID, state: 'complete', sessions: 3, projectDirectory: '/home/me/project', directory: `/spaces/${ID}/project` };
+    const other_mark = (state, sessions) => ({ id: OTHER, name: OTHER, state, sessions, projectDirectory: null, directory: null });
 
     const merged = await host.mergeSessionList(hostList);
     expect(merged.data.map((item) => item.id)).toEqual(['host-1', 'a1', 'a2', 'a3', 'b1']);
@@ -190,7 +241,7 @@ describe('createSpacesHost: sessions and events', () => {
     expect(first.state.listRequests).toBe(pagesRead);
     await sleep(2_100);
     expect(merged.data[1]).not.toHaveProperty('permissions');
-    expect(merged.spaces).toEqual([{ id: ID, state: 'complete', sessions: 3 }, { id: OTHER, state: 'complete', sessions: 1 }]);
+    expect(merged.spaces).toEqual([first_mark, other_mark('complete', 1)]);
     expect(logs.join('\n')).toContain('space_session_host_id');
     expect(logs.join('\n')).toContain('space_session_outside_root');
     expect(logs.join('\n')).not.toContain('a host session, claimed');
@@ -201,13 +252,13 @@ describe('createSpacesHost: sessions and events', () => {
     second.state.sessions.length = 0;
     const stale = await host.mergeSessionList(hostList);
     expect(stale.data.map((item) => item.id)).toEqual(['host-1', 'a1', 'a2', 'a3', 'b1']);
-    expect(stale.spaces).toEqual([{ id: ID, state: 'complete', sessions: 3 }, { id: OTHER, state: 'stale', sessions: 1 }]);
+    expect(stale.spaces).toEqual([first_mark, other_mark('stale', 1)]);
     expect(logs.join('\n')).toContain(`the session list of space ${OTHER} did not come`);
 
     // Back, and empty: an empty answer is an answer.
     await host.manager.startSpace({ placeId: 'fake', spaceId: OTHER });
     const empty = await host.mergeSessionList(hostList);
-    expect(empty.spaces[1]).toEqual({ id: OTHER, state: 'complete', sessions: 0 });
+    expect(empty.spaces[1]).toEqual(other_mark('complete', 0));
 
     // A space that is gone is not listed; a host without spaces answers with the very same object.
     spaces.clear();
@@ -237,7 +288,8 @@ describe('createSpacesHost: sessions and events', () => {
 
     const server = http.createServer((_req, res) => { res.statusCode = 404; res.end(); });
     servers.push(server);
-    host.attachUpgrades(server, { uiAuthController: { enabled: false }, isRequestOriginAllowed: async () => true });
+    host.prepareUpgrades({ uiAuthController: { enabled: false }, isRequestOriginAllowed: async () => true });
+    server.on('upgrade', host.upgradeHandler);
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
     const socket = new WebSocket(`ws://127.0.0.1:${server.address().port}/api/spaces/${ID}/terminal/ws`, { headers: { origin: 'http://app.test' } });
     const echoed = await new Promise((resolve, reject) => {
