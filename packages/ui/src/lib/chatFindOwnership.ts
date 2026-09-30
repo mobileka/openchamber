@@ -5,7 +5,8 @@
  * the agent manager, mini chat). The shortcut registry dispatches one handler
  * per action, so the handler is registered once and resolves the owning column
  * here: the focused scope first, then the last column the user interacted with,
- * then the first active column.
+ * then the first active column. `openChatFindFromEvent` and `closeAnyChatFind`
+ * are the entry points the shortcut layer calls.
  */
 
 export type ChatFindOwner = {
@@ -43,9 +44,7 @@ export const registerChatFindOwner = (owner: ChatFindOwner): (() => void) => {
   };
 };
 
-const activeOwners = (): ChatFindOwner[] => [...owners.values()].filter((owner) => owner.isActive());
-
-export const resolveChatFindOwner = (): ChatFindOwner | null => {
+const resolveChatFindOwner = (): ChatFindOwner | null => {
   const scope = globalThis.document?.activeElement?.closest('[data-chat-find-scope]');
   if (scope instanceof HTMLElement) {
     for (const owner of owners.values()) {
@@ -59,14 +58,34 @@ export const resolveChatFindOwner = (): ChatFindOwner | null => {
   if (remembered?.isActive()) {
     return remembered;
   }
-  return activeOwners()[0] ?? null;
+  return [...owners.values()].find((owner) => owner.isActive()) ?? null;
+};
+
+/**
+ * The `find_in_chat` handler: opens the bar in the owner the event arrived in,
+ * or reports that another surface keeps the keystroke (each has its own find).
+ */
+export const openChatFindFromEvent = (event: KeyboardEvent): boolean => {
+  const owner = resolveChatFindOwner();
+  if (!owner || !owner.isActive()) {
+    return false;
+  }
+  const target = event.target;
+  const insideScope = target instanceof Node && owner.element.contains(target);
+  const neutralTarget = target === null || target === document.body || target === document.documentElement;
+  if (!insideScope && !neutralTarget) {
+    return false;
+  }
+  owner.open();
+  return true;
 };
 
 export const closeAnyChatFind = (): boolean => {
-  const openOwner = activeOwners().find((owner) => owner.isOpen());
-  if (!openOwner) {
-    return false;
+  for (const owner of owners.values()) {
+    if (owner.isActive() && owner.isOpen()) {
+      owner.closeActive();
+      return true;
+    }
   }
-  openOwner.closeActive();
-  return true;
+  return false;
 };

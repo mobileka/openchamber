@@ -45,7 +45,7 @@ import {
   invokeActiveSelectionAddToChat,
 } from '@/lib/addSelectionToChat';
 import { isIMECompositionEvent } from '@/lib/ime';
-import { closeAnyChatFind, resolveChatFindOwner } from '@/lib/chatFindOwnership';
+import { closeAnyChatFind, openChatFindFromEvent } from '@/lib/chatFindOwnership';
 import { canUseDigitShortcut, hasActiveBtwComposer, hasOpenDropdown, isEditableEventTarget, shouldStopDropdownImeEscape } from './keyboard-shortcut-dom';
 
 const dropdownTargetSelector = [
@@ -158,17 +158,7 @@ export const useKeyboardShortcuts = () => {
     },
     find_in_chat: (event) => {
       if (!currentSessionId) return false;
-      const owner = resolveChatFindOwner();
-      if (!owner || !owner.isActive()) return false;
-      const target = event.target;
-      const insideScope = target instanceof Node && owner.element.contains(target);
-      if (!insideScope) {
-        const neutralTarget = target === null || target === document.body || target === document.documentElement;
-        // Focus in another surface (a file editor, a preview, a terminal)
-        // keeps its own Cmd/Ctrl+F behavior.
-        if (!neutralTarget) return false;
-      }
-      owner.open();
+      return openChatFindFromEvent(event);
     },
     open_session_list: () => {
       const state = useUIStore.getState();

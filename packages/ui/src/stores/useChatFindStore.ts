@@ -71,6 +71,13 @@ const touch = (entry: ChatFindSessionEntry): ChatFindSessionEntry => ({
   touchedAt: Date.now(),
 });
 
+const createEmptyRun = (): ChatFindRun => ({
+  query: '',
+  currentKey: null,
+  currentIndex: 0,
+  historyError: null,
+});
+
 /** True when `directory` is `prefix` itself or lives inside it. */
 const isDirectoryWithin = (directory: string, prefix: string): boolean =>
   directory === prefix || directory.startsWith(prefix === '/' ? '/' : `${prefix}/`);
@@ -89,9 +96,7 @@ export const useChatFindStore = create<ChatFindStore>((set, get) => ({
     }
     const existing = get().entries[key];
     if (existing) {
-      const opened = existing.run
-        ? touch(existing)
-        : touch({ ...existing, run: { query: '', currentKey: null, currentIndex: 0, historyError: null } });
+      const opened = touch({ ...existing, run: existing.run ?? createEmptyRun() });
       set({ entries: { ...get().entries, [key]: opened } });
       return opened;
     }
@@ -100,7 +105,7 @@ export const useChatFindStore = create<ChatFindStore>((set, get) => ({
       directory: normalizedDirectory,
       sessionId,
       settings: { ...DEFAULT_CHAT_FIND_SETTINGS },
-      run: { query: '', currentKey: null, currentIndex: 0, historyError: null },
+      run: createEmptyRun(),
       touchedAt: Date.now(),
     };
     set({ entries: { ...get().entries, [key]: created } });

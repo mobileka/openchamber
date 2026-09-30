@@ -114,20 +114,16 @@ export const buildSearchableMessages = (
     return [];
   }
 
-  const seen = new Set<string>();
+  // Re-setting an existing key keeps its first-appearance slot, so the map
+  // ends up holding each id's newest entry in display order.
   const latestById = new Map<string, ChatMessageEntry>();
   for (const message of messages) {
     latestById.set(message.info.id, message);
   }
 
   const deduped: ChatMessageEntry[] = [];
-  for (const message of messages) {
-    const messageId = message.info.id;
-    if (seen.has(messageId)) {
-      continue;
-    }
-    seen.add(messageId);
-    deduped.push(getNormalizedMessageForDisplay(latestById.get(messageId) ?? message));
+  for (const message of latestById.values()) {
+    deduped.push(getNormalizedMessageForDisplay(message));
   }
 
   const searchable: ChatFindSearchableMessage[] = [];

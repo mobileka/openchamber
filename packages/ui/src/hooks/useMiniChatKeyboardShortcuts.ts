@@ -8,7 +8,7 @@ import { useSelectionStore } from '@/sync/selection-store';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useKeybinds } from './useKeybind';
 import { hasActiveBtwComposer, isEditableEventTarget } from './keyboard-shortcut-dom';
-import { closeAnyChatFind, resolveChatFindOwner } from '@/lib/chatFindOwnership';
+import { closeAnyChatFind, openChatFindFromEvent } from '@/lib/chatFindOwnership';
 import { isIMECompositionEvent } from '@/lib/ime';
 
 export const useMiniChatKeyboardShortcuts = () => {
@@ -95,17 +95,7 @@ export const useMiniChatKeyboardShortcuts = () => {
     },
     cycle_favorite_model_forward: () => cycleFavoriteModel(1),
     cycle_favorite_model_backward: () => cycleFavoriteModel(-1),
-    find_in_chat: (event) => {
-      const owner = resolveChatFindOwner();
-      if (!owner || !owner.isActive()) return false;
-      const target = event.target;
-      const insideScope = target instanceof Node && owner.element.contains(target);
-      if (!insideScope) {
-        const neutralTarget = target === null || target === document.body || target === document.documentElement;
-        if (!neutralTarget) return false;
-      }
-      owner.open();
-    },
+    find_in_chat: openChatFindFromEvent,
     toggle_dictation: () => {
       if (hasActiveBtwComposer()) return false;
       // Same event the main app dispatches; ComposerDictation listens for it.

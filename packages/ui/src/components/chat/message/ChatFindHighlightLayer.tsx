@@ -237,6 +237,12 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
       }
     };
 
+    // The match is where it should be: stop following it until the next one.
+    const settleMatch = (key: string): void => {
+      revealedRef.current = { sessionId, key };
+      stopReveal();
+    };
+
     const stepReveal = (): void => {
       revealFrame = null;
       const match = currentMatch;
@@ -281,8 +287,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
             revealSettled += 1;
           }
           if (revealSettled >= REVEAL_SETTLED_FRAMES) {
-            revealedRef.current = { sessionId, key };
-            stopReveal();
+            settleMatch(key);
             return;
           }
         }
@@ -290,8 +295,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
         ensureMessageVisible(messageElement);
         revealSettled += 1;
         if (revealSettled >= REVEAL_SETTLED_FRAMES) {
-          revealedRef.current = { sessionId, key };
-          stopReveal();
+          settleMatch(key);
           return;
         }
       } else {
@@ -305,8 +309,7 @@ export const ChatFindHighlightLayer = React.memo(function ChatFindHighlightLayer
 
       revealFrames += 1;
       if (revealFrames >= REVEAL_SETTLE_FRAMES) {
-        revealedRef.current = { sessionId, key };
-        stopReveal();
+        settleMatch(key);
         return;
       }
       revealFrame = window.requestAnimationFrame(stepReveal);

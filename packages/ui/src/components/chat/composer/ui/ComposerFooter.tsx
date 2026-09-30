@@ -126,6 +126,20 @@ export function ComposerFooter(props: ComposerFooterProps) {
         btwSelection,
     } = props;
 
+    // One button, two layouts (mobile and desktop footers).
+    const chatFindButton = chatFind?.canSearch ? (
+        <button
+            type="button"
+            className={cn(footerIconButtonClass, chatFind.isOpen && 'text-foreground')}
+            onClick={chatFind.open}
+            title={t('chat.find.openAria')}
+            aria-label={t('chat.find.openAria')}
+            aria-pressed={chatFind.isOpen}
+        >
+            <Icon name="search" className={cn(iconSizeClass)} />
+        </button>
+    ) : null;
+
     return (
         <div
             className={cn(
@@ -165,18 +179,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
                                 permissionAutoAcceptEnabled={permissionAutoAcceptEnabled}
                                 handlePermissionAutoAcceptToggle={onTogglePermissionAutoAccept}
                             />
-                            {chatFind?.canSearch ? (
-                                <button
-                                    type="button"
-                                    className={cn(footerIconButtonClass, chatFind.isOpen && 'text-foreground')}
-                                    onClick={chatFind.open}
-                                    title={t('chat.find.openAria')}
-                                    aria-label={t('chat.find.openAria')}
-                                    aria-pressed={chatFind.isOpen}
-                                >
-                                    <Icon name="search" className={cn(iconSizeClass)} />
-                                </button>
-                            ) : null}
+                            {chatFindButton}
                             {!isBtw ? <SessionGoalButton
                                 sessionId={currentSessionId}
                                 directory={directory}
@@ -249,18 +252,7 @@ export function ComposerFooter(props: ComposerFooterProps) {
                             isExpandedInput={isExpandedInput}
                             onToggle={onToggleExpandedInput}
                         /> : null}
-                        {chatFind?.canSearch ? (
-                            <button
-                                type="button"
-                                className={cn(footerIconButtonClass, chatFind.isOpen && 'text-foreground')}
-                                onClick={chatFind.open}
-                                title={t('chat.find.openAria')}
-                                aria-label={t('chat.find.openAria')}
-                                aria-pressed={chatFind.isOpen}
-                            >
-                                <Icon name="search" className={cn(iconSizeClass)} />
-                            </button>
-                        ) : null}
+                        {chatFindButton}
                         <PermissionAutoAcceptButton
                             footerIconButtonClass={footerIconButtonClass}
                             iconSizeClass={iconSizeClass}

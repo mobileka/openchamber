@@ -134,6 +134,17 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
   }
 
   const trimmed = query.trim();
+  // Escape closes from the field and, while the field is a status note and the
+  // bar root holds focus, from the root.
+  const handleEscape = (event: React.KeyboardEvent<HTMLElement>): void => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    onClose();
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
     if (event.nativeEvent.isComposing || event.keyCode === 229) {
       return;
@@ -147,22 +158,7 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
       }
       return;
     }
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      onClose();
-    }
-  };
-
-  // While blocked the root holds focus, so Escape arrives here instead of on
-  // the unmounted input; the input's own handler stops propagation otherwise.
-  const handleRootKeyDown = (event: React.KeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== 'Escape') {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    onClose();
+    handleEscape(event);
   };
 
   const countLabel = matchCount > 0 ? `${currentIndex + 1}/${matchCount}` : '';
@@ -173,7 +169,7 @@ export const ChatFindBar: React.FC<ChatFindBarProps> = ({
       role="search"
       aria-label={t('chat.find.openAria')}
       tabIndex={blocked ? -1 : undefined}
-      onKeyDown={handleRootKeyDown}
+      onKeyDown={handleEscape}
       className={cn(
         'oc-chat-find-bar absolute inset-x-3 top-3 z-30 flex flex-col gap-1.5 rounded-xl border border-border/60 bg-[var(--surface-elevated)] p-1.5 shadow-lg outline-none',
         className,
