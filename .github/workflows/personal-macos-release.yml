@@ -108,6 +108,7 @@ jobs:
           set -euo pipefail
           bun run build:web-assets
           bun run prepare:opencode-cli
+          bun run prepare:ripgrep
           bun run verify:opencode-cli
           bun run bundle:main
           bun run rebuild:native
