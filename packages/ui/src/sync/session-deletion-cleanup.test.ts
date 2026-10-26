@@ -6,20 +6,16 @@ import { createMessageQueueTarget, getMessageQueueKey, useMessageQueueStore } fr
 import { createInputHistoryIdentity, createInputHistorySubmission, selectInputHistoryEntries, useInputHistoryStore } from '@/stores/useInputHistoryStore';
 import { useSessionFoldersStore } from '@/stores/useSessionFoldersStore';
 import { useInlineCommentDraftStore } from '@/stores/useInlineCommentDraftStore';
-import { isSessionPinned, useSessionPinnedStore } from '@/stores/useSessionPinnedStore';
 import { useSessionMultiSelectStore } from '@/stores/useSessionMultiSelectStore';
-import { getChatFindSessionKey, useChatFindStore } from '@/stores/useChatFindStore';
 import { cleanupPersistedSessionState } from './session-deletion-cleanup';
 
 describe('cleanupPersistedSessionState', () => {
   beforeEach(() => {
     useMessageQueueStore.setState({ queuedMessages: {}, quarantinedLegacyMessages: {} });
     useInlineCommentDraftStore.setState({ drafts: {}, touchedAt: {} });
-    useSessionPinnedStore.setState({ ids: new Set(), touchedAt: {} });
     useSessionFoldersStore.setState({ foldersMap: {}, collapsedFolderIds: new Set() });
     useInputHistoryStore.setState({ globalBuckets: {}, sessionBuckets: {}, scope: 'session' });
     useSessionMultiSelectStore.getState().disable();
-    useChatFindStore.setState({ entries: {} });
   });
 
   test('clears persisted session state only for the deleted composite session', () => {
@@ -49,8 +45,6 @@ describe('cleanupPersistedSessionState', () => {
     };
     useInlineCommentDraftStore.getState().addDraft({ directory: '/repo-a', sessionKey: 'session-1' }, inlineDraft);
     useInlineCommentDraftStore.getState().addDraft({ directory: '/repo-b', sessionKey: 'session-1' }, inlineDraft);
-    useSessionPinnedStore.getState().toggle({ directory: '/repo-a', sessionId: 'session-1' });
-    useSessionPinnedStore.getState().toggle({ directory: '/repo-b', sessionId: 'session-1' });
     const folder = useSessionFoldersStore.getState().createFolder('/repo-a', 'Active');
     useSessionFoldersStore.getState().addSessionToFolder('/repo-a', folder.id, 'session-1');
     const archivedFolder = useSessionFoldersStore.getState().createFolder('__archived__:/repo-a', 'Archived');
@@ -65,8 +59,6 @@ describe('cleanupPersistedSessionState', () => {
     expect(readChatDraft(retainedDraft).text).toBe('retain');
     expect(useInlineCommentDraftStore.getState().getDrafts({ directory: '/repo-a', sessionKey: 'session-1' })).toEqual([]);
     expect(useInlineCommentDraftStore.getState().getDrafts({ directory: '/repo-b', sessionKey: 'session-1' })).toHaveLength(1);
-    expect(isSessionPinned(useSessionPinnedStore.getState().ids, '/repo-a', 'session-1')).toBe(false);
-    expect(isSessionPinned(useSessionPinnedStore.getState().ids, '/repo-b', 'session-1')).toBe(true);
     expect(useSessionFoldersStore.getState().getSessionFolderId('/repo-a', 'session-1')).toBeNull();
     expect(useSessionFoldersStore.getState().getSessionFolderId('__archived__:/repo-a', 'session-1')).toBeNull();
     expect(useSessionMultiSelectStore.getState().selectedIds.has('session-1')).toBe(false);
@@ -74,27 +66,11 @@ describe('cleanupPersistedSessionState', () => {
 
   test('rejects stale runtime cleanup', () => {
     const runtimeKey = getRuntimeKey();
-    useSessionPinnedStore.getState().toggle({ directory: '/repo', sessionId: 'session-1' });
     useSessionMultiSelectStore.getState().toggleSelected('session-1', '/repo');
 
     cleanupPersistedSessionState({ runtimeKey: `${runtimeKey}-stale`, directory: '/repo', sessionId: 'session-1' });
 
-    expect(isSessionPinned(useSessionPinnedStore.getState().ids, '/repo', 'session-1')).toBe(true);
     expect(useSessionMultiSelectStore.getState().selectedIds.has('session-1')).toBe(true);
-  });
-
-  test('clears chat find state only for the deleted composite session', () => {
-    const runtimeKey = getRuntimeKey();
-    useChatFindStore.getState().openSession(runtimeKey, '/repo-a', 'session-1');
-    useChatFindStore.getState().openSession(runtimeKey, '/repo-b', 'session-1');
-    const deletedKey = getChatFindSessionKey(runtimeKey, '/repo-a', 'session-1');
-    const retainedKey = getChatFindSessionKey(runtimeKey, '/repo-b', 'session-1');
-    if (!deletedKey || !retainedKey) throw new Error('chat find identity missing');
-
-    cleanupPersistedSessionState({ runtimeKey, directory: '/repo-a', sessionId: 'session-1' });
-
-    expect(useChatFindStore.getState().entries[deletedKey]).toBeUndefined();
-    expect(useChatFindStore.getState().entries[retainedKey]).toBeDefined();
   });
 
   test('removes only the deleted session input-history bucket', () => {

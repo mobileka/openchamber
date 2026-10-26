@@ -18,14 +18,16 @@ import { createManagedTunnelConfigRuntime } from './lib/tunnels/managed-config.j
 import { createTunnelProviderRegistry } from './lib/tunnels/registry.js';
 import { createCloudflareTunnelProvider } from './lib/tunnels/providers/cloudflare.js';
 import { createNgrokTunnelProvider } from './lib/tunnels/providers/ngrok.js';
-import { createRequestSecurityRuntime } from './lib/security/request-security.js';
+import { createTailscaleTunnelProvider } from './lib/tunnels/providers/tailscale.js';
+import { allowsLocalDevOrigins, buildFrameAncestorsPolicy, createRequestSecurityRuntime, isLocalDevClientOrigin } from './lib/security/request-security.js';
 import {
   getUnauthenticatedLanErrorMessage,
   isLoopbackBindHost,
   isNetworkExposedBindHost,
   isUnsafeUnauthenticatedLanAllowed,
+  readAdvertisedLanUrl,
 } from './lib/security/bind-host.js';
-import { isNetworkAccessBlocked, NETWORK_ACCESS_BLOCKED_ERROR } from './lib/enterprise-mode.js';
+import { isEnterpriseMode, isNetworkAccessBlocked, NETWORK_ACCESS_BLOCKED_ERROR, readEnterprisePolicy } from './lib/enterprise-mode.js';
 import {
   TUNNEL_MODE_MANAGED_LOCAL,
   TUNNEL_MODE_MANAGED_REMOTE,
@@ -67,6 +69,7 @@ import { createThemeRuntime } from './lib/opencode/theme-runtime.js';
 import { createFeatureRoutesRuntime } from './lib/opencode/feature-routes-runtime.js';
 import { parseServeCliOptions } from './lib/opencode/cli-options.js';
 import {
+  isRequestAuthorized,
   registerAuthAndAccessRoutes,
   registerCommonRequestMiddleware,
   registerServerStatusRoutes,
@@ -75,6 +78,8 @@ import { registerOpenChamberRoutes } from './lib/opencode/openchamber-routes.js'
 import { createCommandcodeModelsNoticeRuntime } from './lib/opencode/commandcode-models-notice.js';
 import { createRestartNotifier } from './lib/opencode/restart-notify.js';
 import { createServerUtilsRuntime } from './lib/opencode/server-utils-runtime.js';
+import { createOpenCodeTrust } from './lib/opencode-trust/index.js';
+import { guardOpenCodeFetch } from './lib/opencode-trust/fetch-guard.js';
 import { createStaticRoutesRuntime } from './lib/opencode/static-routes-runtime.js';
 import { createSettingsRuntime } from './lib/opencode/settings-runtime.js';
 import { createOpenCodeResolutionRuntime } from './lib/opencode/opencode-resolution-runtime.js';
@@ -83,12 +88,20 @@ import { resolveOpenCodeUpgradeCapability } from './lib/opencode/upgrade-capabil
 import { createBootstrapRuntime } from './lib/opencode/bootstrap-runtime.js';
 import { createSessionRuntime } from './lib/opencode/session-runtime.js';
 import { configureOpenCodeRuntimeProviders, resetOpenCodeRuntimeProviders } from './lib/small-model/client.js';
+import { configureOpenCodeCredentials, openCodeCredentialSource } from './lib/opencode/auth.js';
+import { configureProjectStartCommandSource, openCodeProjectStartCommandSource } from './lib/opencode/project-start-command.js';
 import { createOpenCodeWatcherRuntime } from './lib/opencode/watcher.js';
+import { createTurnStartReader } from './lib/opencode/turn-start.js';
+import { createSessionActivityProbe } from './lib/opencode/session-activity.js';
 import { createSessionAssistRuntime } from './lib/session-assist/runtime.js';
 import { createSessionGoalRuntime } from './lib/session-goal/runtime.js';
 import { createContextObligatoryRuntime } from './lib/context-obligatory/runtime.js';
-import { createLinearSessionStatusRuntime } from './lib/linear/status-runtime.js';
+import { createSessionWarmingRuntime } from './lib/session-warming/runtime.js';
+import { createTrackerRegistry } from './lib/trackers/registry.js';
+import { createTrackerSessionStatus } from './lib/trackers/session-status.js';
+import { sourceControlProviderDescriptors } from './lib/source-control/provider-descriptors.js';
 import { createSessionKnowledgeRuntime } from './lib/session-knowledge/runtime.js';
+import { createMessageSearchRuntime } from './lib/message-search/runtime.js';
 import { createScheduledTasksRuntime } from './lib/scheduled-tasks/runtime.js';
 import { createServerStartupRuntime } from './lib/opencode/server-startup-runtime.js';
 import { createTunnelWiringRuntime } from './lib/opencode/tunnel-wiring-runtime.js';
@@ -102,18 +115,24 @@ import { createApnsRuntime } from './lib/notifications/apns-runtime.js';
 import { createNotificationTemplateRuntime } from './lib/notifications/template-runtime.js';
 import { createPermissionAutoAcceptRuntime } from './lib/permission-auto-accept/runtime.js';
 import { createMessageQueueRuntime } from './lib/message-queue/runtime.js';
+import { createDispatchResultsRuntime } from './lib/dispatch-results/runtime.js';
+import { isWorkflowFeatureAvailable } from './lib/workflows/feature-flag.js';
+import { createWorkflowAgentSessions } from './lib/workflows/agent-session.js';
+import { createWorkflowRuntime } from './lib/workflows/runtime.js';
+import { createWorkflowRunStore } from './lib/workflows/store.js';
 import { createRoutingRuntime } from './lib/routing/runtime.js';
 import { createJevClient } from './lib/routing/jev.js';
 import { createSessionWorkRuntime } from './lib/session-work/runtime.js';
 import { createSessionLineage } from './lib/session-lineage.js';
 import { createGracefulShutdownRuntime } from './lib/opencode/shutdown-runtime.js';
 import { beginGuestServiceHost, beginGuestServiceShutdown, stopAllGuestServices } from './lib/guests/service.js';
+import { guestServiceRegistryDir } from './lib/guests/service-registry.js';
 import { findInstalledGuest } from './lib/guests/catalog.js';
 import { extensionsPersistPath } from './lib/guests/persist.js';
 import { createGuestSurfaceRuntime } from './lib/guests/surface.js';
 import { BROWSER_PROVIDER_IDLE_MS } from '@openchamber/sdk';
 import { createProjectConfigRuntime } from './lib/projects/project-config.js';
-import { migrateLegacyUserDirs } from './lib/data-dir-migration.js';
+import { ensureChatsDir, migrateLegacyUserDirs } from './lib/data-dir-migration.js';
 import { createProjectContextRuntime } from './lib/project-context/runtime.js';
 import { createAgentMemoryRuntime } from './lib/agent-memory/runtime.js';
 import { createAgentMemoryActions } from './lib/agent-memory/actions.js';
@@ -122,14 +141,22 @@ import { isAgentMemoryFeatureAvailable } from './lib/agent-memory/feature-flag.j
 import { createSpacesHost } from './lib/spaces/host.js';
 import { createSpaceArchive } from './lib/spaces/space-archive.js';
 import { readIdleStopSetting, startIdleStop } from './lib/spaces/idle-stop.js';
+import { permissionDefaultOf, readSpacePermissionDefault } from './lib/spaces/space-permission-default.js';
+import { dockerHostOf } from './lib/spaces/places/ssh-host.js';
 import { SPACE_IDLE_EXIT_CODE } from './lib/spaces/layout.js';
 import { createSwitchController, registerSpaceRoutes } from './lib/spaces/routes.js';
-import { resolvePrimaryWorktreeRoot } from './lib/git/service.js';
+import { configureGitEnvironment, getCheckedOutBranch, getWorktrees, readRenameableGeneratedBranch, renameGeneratedWorktreeBranch, resolvePrimaryWorktreeRoot, setWorktreeTaskTitle } from './lib/git/service.js';
+import { createEnvironmentStore } from './lib/environment/store.js';
+import { createEnvironmentRuntime } from './lib/environment/runtime.js';
+import { readOpenCodeServiceEnv } from './lib/environment/opencode-service-env.js';
+import { OPENCODE_CONFIG_DIR } from './lib/opencode/shared.js';
+import { createWorktreeBootstrapStore } from './lib/git/worktree-bootstrap-storage.js';
 import { createRemoteClientAuthRuntime } from './lib/client-auth/remote-clients.js';
 import { createClientPairingRuntime } from './lib/client-auth/pairing.js';
 import { attachRealtimeProxy } from './lib/realtime-proxy.js';
 import { createRelayService, relayBlockedByEnterprise } from './lib/relay/service.js';
 import { createRelayHostLock } from './lib/relay/host-lock.js';
+import { createRelayKeyStore } from './lib/relay/key-store.js';
 import { createAgentToolRuntime } from './lib/agent-tool/runtime.js';
 import { createBrowserControlBroker } from './lib/browser-control/broker.js';
 import { createBrowserControlRouter } from './lib/browser-control/provider.js';
@@ -137,18 +164,26 @@ import { createDevServerScanner } from './lib/dev-servers/routes.js';
 import { createDevTunnelRuntime } from './lib/dev-tunnel/runtime.js';
 import { registerBrowserControlRoutes } from './lib/browser-control/routes.js';
 import { createManagedConfigRuntime } from './lib/opencode/managed-config-file.js';
+import { createLimitFailoverRuntime } from './lib/limit-failover/runtime.js';
+import { prepareInstanceDir } from './lib/opencode/instance-dir.js';
 import { createOpenChamberSessionService } from './lib/openchamber-sessions/routes.js';
 import { createSessionMetadataStore, createOpenCodeSessionMetadata } from './lib/openchamber-sessions/session-metadata-store.js';
+import { createUnreadBaseline } from './lib/openchamber-sessions/unread-baseline.js';
+import { createTurnDurationRecorder } from './lib/openchamber-sessions/turn-duration.js';
 import { createOpenCodeClient } from './lib/openchamber-sessions/opencode-client.js';
 import { createScheduledTaskService } from './lib/scheduled-tasks/service.js';
 import { createOpenChamberControlService } from './lib/openchamber-control/service.js';
 import { createPluginNotificationEmitter } from './lib/notifications/emit-route.js';
 import { OpenChamberControlError } from './lib/openchamber-control/error.js';
+import { createSessionLinker } from './lib/openchamber-sessions/session-link.js';
 import { createFileOpenRequester } from './lib/openchamber-control/file-open.js';
 import { applyConnectAttemptTimeout } from './lib/network-defaults.js';
+import { applyOutboundProxyFromEnv } from './lib/outbound-proxy.js';
+import { readOpenCodeLoad } from './lib/diagnostics/opencode-load.js';
 
 // Background CLI launches enter here in a fresh process, without CLI defaults.
 applyConnectAttemptTimeout();
+applyOutboundProxyFromEnv();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -266,10 +301,6 @@ const shouldSkipApiCompression = () => {
 
 const OPENCHAMBER_VERBOSE_REQUEST_LOGS = isEnvFlagEnabled(process.env.OPENCHAMBER_VERBOSE_REQUEST_LOGS);
 
-const PLAN_MODE_EXPERIMENT_ENABLED =
-  isEnvFlagEnabled(process.env.OPENCODE_EXPERIMENTAL_PLAN_MODE)
-  || isEnvFlagEnabled(process.env.OPENCODE_EXPERIMENTAL);
-
 const fsPromises = fs.promises;
 
 const settingsNormalizationRuntime = createSettingsNormalizationRuntime({
@@ -277,6 +308,7 @@ const settingsNormalizationRuntime = createSettingsNormalizationRuntime({
   path,
   processLike: process,
   realpathSync: fs.realpathSync,
+  readdirSync: fs.readdirSync,
   tunnelBootstrapTtlDefaultMs: TUNNEL_BOOTSTRAP_TTL_DEFAULT_MS,
   tunnelBootstrapTtlMinMs: TUNNEL_BOOTSTRAP_TTL_MIN_MS,
   tunnelBootstrapTtlMaxMs: TUNNEL_BOOTSTRAP_TTL_MAX_MS,
@@ -336,6 +368,7 @@ const deleteImportedTheme = (...args) => themeRuntime.deleteImportedTheme(...arg
 
 let notificationTemplateRuntime = null;
 let agentToolRuntime = null;
+let limitFailoverRuntime = null;
 let managedConfigRuntime = null;
 
 const createTimeoutSignal = (...args) => notificationTemplateRuntime.createTimeoutSignal(...args);
@@ -354,11 +387,32 @@ const OPENCHAMBER_DATA_DIR = OPENCHAMBER_USER_CONFIG_ROOT;
 const SETTINGS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'settings.json');
 const PUSH_SUBSCRIPTIONS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'push-subscriptions.json');
 const APNS_TOKENS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'apns-tokens.json');
+const openCodeTrust = createOpenCodeTrust({
+  storePath: path.join(OPENCHAMBER_DATA_DIR, 'opencode-trust.json'),
+  // Declared further down; first read on the first check, after startup.
+  listKnownDirectories: async () => {
+    const settings = await readSettingsFromDiskMigrated();
+    return sanitizeProjects(settings?.projects || []).map((project) => project.path);
+  },
+});
+// Server features reach OpenCode through clients of their own, with folders
+// the UI hands them. Every such request passes the same trust check as the
+// proxy. Installed before any runtime below captures `fetch`.
+globalThis.fetch = guardOpenCodeFetch({
+  fetchImpl: globalThis.fetch,
+  openCodeTrust,
+  buildOpenCodeUrl: (...args) => buildOpenCodeUrl(...args),
+  getOpenCodeAuthHeaders: (...args) => getOpenCodeAuthHeaders(...args),
+});
 const REMOTE_CLIENTS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'remote-clients.json');
 const CLIENT_PAIRING_SESSIONS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'client-pairing-sessions.json');
 const CLOUDFLARE_MANAGED_REMOTE_TUNNELS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'cloudflare-managed-remote-tunnels.json');
 const CLOUDFLARE_LEGACY_NAMED_TUNNELS_FILE_PATH = path.join(OPENCHAMBER_DATA_DIR, 'cloudflare-named-tunnels.json');
 const CLOUDFLARE_MANAGED_REMOTE_TUNNELS_VERSION = 1;
+const worktreeBootstrapStore = createWorktreeBootstrapStore({
+  filePath: path.join(OPENCHAMBER_DATA_DIR, 'git-worktree-bootstrap.json'),
+  fsImpl: fsPromises,
+});
 
 const managedTunnelConfigRuntime = createManagedTunnelConfigRuntime({
   fsPromises,
@@ -432,7 +486,25 @@ const settingsRuntime = createSettingsRuntime({
   normalizeManagedRemoteTunnelPresetTokens,
   syncManagedRemoteTunnelConfigWithPresets,
   upsertManagedRemoteTunnelToken,
+  chatRoots: [path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR],
   onManagedPluginSettingsChanged: () => managedConfigRuntime?.refreshManagedConfigFile(),
+  // Declared further down; settings are only saved once the server serves requests.
+  onMessageSearchEnabledChanged: (enabled) => messageSearchRuntime.setEnabled(enabled),
+  onMessageSearchReasoningChanged: (enabled) => messageSearchRuntime.setReasoningEnabled(enabled),
+  // Running spaces hear the new default at once; the save does not wait for them.
+  onPermissionDefaultModeChanged: (mode) => {
+    void spacesHost?.journey.changePermissionDefault(mode).catch((error) => {
+      console.warn(`[spaces] the default permission mode did not reach the running spaces: ${error?.code ?? error?.message ?? error}`);
+    });
+  },
+  // Declared further down; settings are only saved once the server serves requests.
+  // A folder OpenCode may not open yet must not become the one server-side
+  // reads fall back to.
+  onLastDirectoryChanged: (directory) => {
+    void openCodeTrust.isTrusted(directory).then((trusted) => {
+      if (trusted) openCodeLifecycleRuntime.noteCurrentDirectory(directory);
+    }, () => {});
+  },
 });
 
 const readSettingsFromDiskMigrated = (...args) => settingsRuntime.readSettingsFromDiskMigrated(...args);
@@ -443,6 +515,7 @@ const persistSettings = (...args) => settingsRuntime.persistSettings(...args);
 
 const requestSecurityRuntime = createRequestSecurityRuntime({
   readSettingsFromDiskMigrated,
+  allowLocalDevOrigins: allowsLocalDevOrigins(process.env),
 });
 
 const getUiSessionTokenFromRequest = (...args) => requestSecurityRuntime.getUiSessionTokenFromRequest(...args);
@@ -474,6 +547,16 @@ const isUiVisible = (...args) => pushRuntime.isUiVisible(...args);
 const ensurePushInitialized = (...args) => pushRuntime.ensurePushInitialized(...args);
 const setPushInitialized = (...args) => pushRuntime.setPushInitialized(...args);
 
+// Host relay identity keys, shared by the push relay and the private relay.
+const relayKeyStore = createRelayKeyStore({
+  fsPromises,
+  path,
+  dataDir: OPENCHAMBER_DATA_DIR,
+  readSettingsFromDiskMigrated,
+  readSettingsStrict: readSettingsFromDiskStrict,
+  writeSettingsToDisk,
+});
+
 const apnsRuntime = createApnsRuntime({
   fsPromises,
   path,
@@ -481,8 +564,7 @@ const apnsRuntime = createApnsRuntime({
   http2,
   APNS_TOKENS_FILE_PATH,
   readSettingsFromDiskMigrated,
-  writeSettingsToDisk,
-  readSettingsStrict: readSettingsFromDiskStrict,
+  relayKeyStore,
 });
 
 const addOrUpdateApnsToken = (...args) => apnsRuntime.addOrUpdateApnsToken(...args);
@@ -524,6 +606,20 @@ const broadcastOpenChamberUiEvent = createGlobalUiEventBroadcaster({
   wsClients: uiNotificationWsClients,
   writeSseEvent,
 });
+
+// Permission modes and requests left for the user go where the global events
+// go (the main WebSocket, and the notification stream an isolated space's host
+// reads) and to the control stream: a window whose main event stream runs over
+// SSE reads only that one, and without them it hides requests for good.
+const broadcastControlSseEvent = createGlobalUiEventBroadcaster({
+  sseClients: uiOpenChamberEventClients,
+  wsClients: new Set(),
+  writeSseEvent,
+});
+const broadcastPermissionUiEvent = (payload) => {
+  broadcastControlSseEvent(payload);
+  broadcastGlobalUiEvent(payload);
+};
 
 /**
  * Per-session OpenChamber state (goal progress, the assist recap, the
@@ -577,6 +673,8 @@ const sessionRuntime = createSessionRuntime({
   writeSseEvent,
   getNotificationClients: () => uiNotificationClients,
   broadcastEvent: broadcastGlobalUiEvent,
+  // Called, not captured: the OpenCode URL and auth helpers are declared further down.
+  readTurnStart: (sessionId) => createTurnStartReader({ buildOpenCodeUrl, getOpenCodeAuthHeaders }).readTurnStart(sessionId),
 });
 
 const getActiveSessionCount = () => sessionRuntime.getActiveSessionCount();
@@ -622,6 +720,10 @@ const projectContextRuntime = createProjectContextRuntime({
   path,
   projectsDirPath: OPENCHAMBER_PROJECTS_CONFIG_DIR,
   resolveSharedPlansDir: (projectId) => projectConfigRuntime.resolveSharedPlansDir(projectId),
+  onChanged: (projectId) => broadcastOpenChamberUiEvent({
+    type: 'openchamber:project-context-changed',
+    properties: { projectId },
+  }),
 });
 
 const agentMemoryRuntime = createAgentMemoryRuntime({
@@ -677,13 +779,14 @@ let isExternalOpenCode = false;
 let exitOnShutdown = true;
 let uiAuthController = null;
 // The isolated-spaces host: the place, the manager and the dispatcher. Null while the feature's
-// switch is off, and then nothing of the feature runs, see docs/isolated-spaces/DESIGN.md.
+// switch is off, and then nothing of the feature runs (decision 19 in the module's DOCUMENTATION.md).
 let spacesHost = null;
 let activeTunnelController = null;
 let globalWatcherStartPromise = null;
 const tunnelProviderRegistry = createTunnelProviderRegistry([
   createCloudflareTunnelProvider(),
   createNgrokTunnelProvider(),
+  createTailscaleTunnelProvider(),
 ]);
 tunnelProviderRegistry.seal();
 const tunnelAuthController = createTunnelAuth();
@@ -814,7 +917,11 @@ const scheduleOpenCodeApiDetection = (...args) => openCodeNetworkRuntime.schedul
 // Plugin-registered providers exist only inside the running OpenCode process.
 // Small-model callers resolve them through this connection; without it they
 // stay on the file-based resolution and plugin models remain unreachable.
-configureOpenCodeRuntimeProviders({ buildOpenCodeUrl, getOpenCodeAuthHeaders });
+configureOpenCodeRuntimeProviders({
+  buildOpenCodeUrl,
+  getOpenCodeAuthHeaders,
+  getDefaultDirectory: () => openCodeLifecycleRuntime.getDefaultOpenCodeDirectory(),
+});
 
 const ENV_CONFIGURED_API_PREFIX = normalizeApiPrefix(
   process.env.OPENCODE_API_PREFIX || process.env.OPENCHAMBER_API_PREFIX || ''
@@ -898,6 +1005,8 @@ notificationTemplateRuntime = createNotificationTemplateRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   resolveGitBinaryForSpawn,
+  resolvePrimaryWorktreeRoot,
+  chatRoots: [path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR],
 });
 
 const notificationTriggerRuntime = createNotificationTriggerRuntime({
@@ -916,6 +1025,8 @@ const notificationTriggerRuntime = createNotificationTriggerRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   readSessionMetadata: readStoredSessionMetadata,
+  // Read at call time: the isolated-spaces switch turns the host on and off live.
+  spaceFetchFor: (spaceId) => spacesHost?.openCodeFetchFor(spaceId) ?? null,
 });
 
 const maybeSendPushForTrigger = (...args) => notificationTriggerRuntime.maybeSendPushForTrigger(...args);
@@ -925,6 +1036,18 @@ clearPendingPushBadge = () => notificationTriggerRuntime.clearPendingPushBadge()
 // Which sessions are subsessions: per-turn work skips them without reading.
 const sessionLineage = createSessionLineage();
 
+// Unread marks are OpenCode's (`time.idle` / `time.viewed`); the baseline keeps
+// turns that ended before OpenChamber read them from all showing as unread.
+// Read now, so a turn that ends before the first client asks is not counted
+// as old.
+const unreadBaseline = createUnreadBaseline({ dataDir: OPENCHAMBER_DATA_DIR });
+void unreadBaseline.get();
+
+const turnDurationRecorder = createTurnDurationRecorder({
+  persistSessionMetadataPatch: (...args) => persistSessionMetadataPatch(...args),
+  isChildSession: (sessionID) => sessionLineage.isChild(sessionID),
+});
+
 const sessionAssistRuntime = createSessionAssistRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
@@ -932,10 +1055,15 @@ const sessionAssistRuntime = createSessionAssistRuntime({
   persistSessionAssist: (sessionID, directory, assist) =>
     persistSessionMetadataPatch(sessionID, { openchamber: { assist } }, { directory }),
   // Declared further down; only ever called after startup.
-  isSessionArchived: (sessionID) => openChamberSessionService.archiveStore.isArchived(sessionID),
+  isSessionArchived: (sessionID) => openChamberSessionService.sessionArchive.isArchived(sessionID),
   // Declared further down; only ever called after startup.
   evaluateTurn: (input) => sessionWorkRuntime.evaluateTurnEnd(input),
   lineage: sessionLineage,
+  // Clients hold a left chat's OpenCode location until its assist is done.
+  onPendingChange: ({ sessionId, directory, pending }) => broadcastOpenChamberUiEvent({
+    type: 'openchamber:session-assist',
+    properties: { sessionID: sessionId, directory: directory || null, pending },
+  }),
 });
 
 const sessionGoalRuntime = createSessionGoalRuntime({
@@ -945,8 +1073,13 @@ const sessionGoalRuntime = createSessionGoalRuntime({
   classifierEndpoint: () => routingRuntime.classifierEndpoint(),
   jev: createJevClient(),
   readSessionMetadata: readStoredSessionMetadata,
-  persistSessionGoal: (sessionID, directory, goal) =>
-    persistSessionMetadataPatch(sessionID, { openchamber: { goal } }, { directory }),
+  persistSessionGoal: async (sessionID, directory, goal, canWrite) => {
+    if (!canWrite) return persistSessionMetadataPatch(sessionID, { openchamber: { goal } }, { directory });
+    const result = await updateSessionMetadataWith(sessionID, (metadata) => (
+      canWrite(metadata) ? { openchamber: { goal } } : null
+    ), { directory });
+    return result.changed;
+  },
   emitGoalNotification: async ({ sessionId, directory, status, goal }) => {
     // The goal settle notification replaces the per-turn ready notifications
     // (suppressed while the goal is active) — so it obeys the same toggle.
@@ -982,6 +1115,14 @@ const sessionGoalRuntime = createSessionGoalRuntime({
     });
   },
 });
+
+/** A directory-scoped OpenCode client for one session-route call. */
+const openCodeSessionClient = (directory) => createOpenCodeClient({
+  baseUrl: buildOpenCodeUrl('/', '').replace(/\/$/, ''),
+  headers: getOpenCodeAuthHeaders(),
+  directory,
+});
+
 /**
  * Owns what a session must be told about the project's knowledge. Every sender
  * asks it — the UI over HTTP, scheduled tasks and agent-dispatched sessions in
@@ -994,21 +1135,66 @@ const sessionKnowledgeRuntime = createSessionKnowledgeRuntime({
   // reference here would read it before it exists.
   resolveProjectId: (directory) => resolveMemoryProjectId(directory),
   isAgentMemoryEnabled,
+  // The plugin carrying the tool exists only in an OpenCode we launched.
+  isSessionLinkingAvailable: async () => {
+    if (isExternalOpenCode || ENV_SKIP_OPENCODE_START) return false;
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return settings?.agentControlToolEnabled !== false;
+  },
+  readCheckoutBranch: getCheckedOutBranch,
+  readPlaceholderBranch: readRenameableGeneratedBranch,
+  isPageRenderingAvailable: async () => {
+    if (isExternalOpenCode || ENV_SKIP_OPENCODE_START) return false;
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return settings?.agentRenderToolEnabled !== false;
+  },
+  isWorkflowAvailable: async () => {
+    if (isExternalOpenCode || ENV_SKIP_OPENCODE_START || !isWorkflowFeatureAvailable()) return false;
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return settings?.agentWorkflowToolEnabled !== false;
+  },
+  areAgentToolsInCodeMode: async () => {
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return settings?.agentToolsCodeMode === true;
+  },
   readSessionMetadata: readStoredSessionMetadata,
-  // Pins and the delivered-signature cursor are read from and written to
-  // OpenChamber's own store; nothing here talks to OpenCode any more.
+  // Pins are read from and written to OpenChamber's own store.
   persistSessionMetadata: (sessionID, directory, patch) => persistSessionMetadataPatch(sessionID, patch, { directory }),
+  instructionEntries: {
+    put: (sessionID, directory, key, value) => openCodeSessionClient(directory)
+      .session.instructions.entry.put({ sessionID, key, value }),
+    remove: (sessionID, directory, key) => openCodeSessionClient(directory)
+      .session.instructions.entry.remove({ sessionID, key }),
+  },
 });
 
 const contextObligatoryRuntime = createContextObligatoryRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
-  sessionKnowledgeRuntime,
   readSessionMetadata: readStoredSessionMetadata,
   persistContextCursor: (sessionID, directory, patch) => persistSessionMetadataPatch(sessionID, patch, { directory }),
 });
 
-const linearSessionStatusRuntime = createLinearSessionStatusRuntime();
+// Keeps the prompt cache of the sessions the user picked warm while they sit
+// idle; the per-session counterpart of OpenCode's `warming` config.
+const sessionWarmingRuntime = createSessionWarmingRuntime({
+  dataDir: OPENCHAMBER_DATA_DIR,
+  buildOpenCodeUrl,
+  getOpenCodeAuthHeaders,
+  broadcast: broadcastOpenChamberUiEvent,
+});
+sessionWarmingRuntime.start();
+
+// The tracker registry, one per server. Tracker and source-control ids share
+// one namespace (tracked items, the read cache), so the source-control ids are
+// refused here and an overlap fails at startup.
+const trackerRegistry = createTrackerRegistry(undefined, {
+  foreignIds: sourceControlProviderDescriptors.list().map((descriptor) => descriptor.id),
+});
+// Session events for every tracker that posts session comments: each one's
+// runtime starts on the first event and a failed load is retried later, so a
+// tracker that fails to load leaves the others running and is not silent for good.
+const trackerSessionStatus = createTrackerSessionStatus({ registry: trackerRegistry });
 
 const globalMessageStreamHub = createGlobalMessageStreamHub({
   buildOpenCodeUrl,
@@ -1024,6 +1210,7 @@ const routingRuntime = createRoutingRuntime({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   broadcastGlobalUiEvent: broadcastOpenChamberUiEvent,
+  isSessionWarm: (sessionId, cacheLifetimeMs) => sessionWarmingRuntime.isSessionWarm(sessionId, cacheLifetimeMs),
 });
 
 // "In work": Jev opens a session when real work starts in it and hints when a
@@ -1035,7 +1222,7 @@ const sessionWorkRuntime = createSessionWorkRuntime({
   jev: createJevClient(),
   readMetadata: (sessionID, directory) => sessionMetadataStore.get(sessionID, { directory }),
   updateMetadata: updateSessionMetadataWith,
-  isSessionArchived: (sessionID) => openChamberSessionService.archiveStore.isArchived(sessionID),
+  isSessionArchived: (sessionID) => openChamberSessionService.sessionArchive.isArchived(sessionID),
   chatRoots: [path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'chats'), OPENCHAMBER_CHATS_DIR],
   lineage: sessionLineage,
 });
@@ -1046,10 +1233,14 @@ const permissionAutoAcceptRuntime = createPermissionAutoAcceptRuntime({
   getOpenCodeAuthHeaders,
   readSettingsFromDiskMigrated,
   persistSettings,
-  broadcastGlobalUiEvent,
+  broadcastGlobalUiEvent: broadcastPermissionUiEvent,
   evaluatePermission: (permission, directory) => routingRuntime.evaluatePermission(permission, directory),
   onPermissionReplied: (permissionId) => routingRuntime.forgetPermission(permissionId),
   resolveLegacyEnabledMode: async () => ((await routingRuntime.legacySafetyNetEnabled()) ? 'safety' : 'auto'),
+  // Only a space's environment names this file: the host writes the user's default there.
+  readDefaultMode: process.env.OPENCHAMBER_SPACE_PERMISSION_DEFAULT_FILE
+    ? () => readSpacePermissionDefault(process.env.OPENCHAMBER_SPACE_PERMISSION_DEFAULT_FILE)
+    : undefined,
 });
 permissionAutoAcceptRuntime.start();
 // A request the safety net held still needs the user, so only one that was
@@ -1069,10 +1260,78 @@ const messageQueueRuntime = createMessageQueueRuntime({
   // shared control stream for SSE clients and the existing WS fan-out.
   broadcastGlobalUiEvent: broadcastOpenChamberUiEvent,
   resolveAutoSelection: (send) => routingRuntime.resolveAutoSelection(send),
-  onPromptSent: (sessionId) => sessionRuntime.markUserMessageSent(sessionId),
+  persistSessionGoal: (sessionID, directory, goal) =>
+    persistSessionMetadataPatch(sessionID, { openchamber: { goal } }, { directory }),
+  beforeScheduledTaskSend: (...args) => scheduledTasksRuntime.beforeScheduledTaskSend(...args),
+  validateScheduledTaskTarget: (...args) => scheduledTasksRuntime.validateTarget(...args),
+  onScheduledTaskResult: (...args) => scheduledTasksRuntime.onScheduledTaskResult(...args),
   dataDir: OPENCHAMBER_DATA_DIR,
 });
 messageQueueRuntime.start();
+
+// Sessions an agent dispatched with `returnResult` report back to it: their
+// final answer lands in the dispatching session and wakes it.
+const dispatchResultsRuntime = createDispatchResultsRuntime({
+  globalEventHub: globalMessageStreamHub,
+  buildOpenCodeUrl,
+  getOpenCodeAuthHeaders,
+  dataDir: OPENCHAMBER_DATA_DIR,
+  // Declared further down; only ever called after startup.
+  isSessionArchived: (sessionID) => openChamberSessionService.sessionArchive.isArchived(sessionID),
+});
+dispatchResultsRuntime.start();
+
+// Agent workflows: scripts that fan a task out to many agents, run here while
+// the agent that asked stays free. Absent entirely unless the build flag is set.
+const isWorkflowToolEnabled = async () => {
+  if (!isWorkflowFeatureAvailable()) return false;
+  const settings = await readSettingsFromDiskMigrated().catch(() => null);
+  return settings?.agentWorkflowToolEnabled !== false;
+};
+const workflowAgentSessions = isWorkflowFeatureAvailable()
+  ? createWorkflowAgentSessions({
+    buildOpenCodeUrl,
+    getOpenCodeAuthHeaders,
+    // Declared further down; only ever called after startup.
+    waitForOpenCodeReady: (...args) => waitForOpenCodeReady(...args),
+    globalEventHub: globalMessageStreamHub,
+  })
+  : null;
+const workflowRuntime = workflowAgentSessions
+  ? createWorkflowRuntime({
+    store: createWorkflowRunStore({ fsPromises, path, dataDir: OPENCHAMBER_DATA_DIR }),
+    agentSessions: workflowAgentSessions,
+    postSynthetic: workflowAgentSessions.postSynthetic,
+    // Declared further down; only ever called after startup.
+    broadcast: (event) => broadcastOpenChamberUiEvent(event),
+    isEnabled: isWorkflowToolEnabled,
+    fsPromises,
+    path,
+  })
+  : null;
+if (workflowRuntime) {
+  void workflowRuntime.start().catch((error) => {
+    console.warn('[workflows] failed to restore runs:', error?.message ?? error);
+  });
+  // Reports wait for OpenCode, which answers once the event hub connects.
+  globalMessageStreamHub.subscribeStatus((status) => {
+    if (status?.type === 'connect') void workflowRuntime.deliverPending();
+  });
+}
+
+// Full-text search over this server's conversations (user messages and agent
+// replies). Opt-in: off by default, and off means idle. The index is derived
+// data in the data dir, fed from the same event stream; see lib/message-search.
+const messageSearchRuntime = createMessageSearchRuntime({
+  dataDir: OPENCHAMBER_DATA_DIR,
+  buildOpenCodeUrl,
+  getOpenCodeAuthHeaders,
+  globalEventHub: globalMessageStreamHub,
+  readSettings: async () => {
+    const settings = await readSettingsFromDisk();
+    return { enabled: settings.messageSearchEnabled === true, reasoning: settings.messageSearchReasoningEnabled === true };
+  },
+});
 
 const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
   waitForOpenCodePort: (...args) => waitForOpenCodePort(...args),
@@ -1080,11 +1339,32 @@ const openCodeWatcherRuntime = createOpenCodeWatcherRuntime({
   getOpenCodeAuthHeaders,
   parseSseDataPayload: (...args) => parseSseDataPayload(...args),
   globalEventHub: globalMessageStreamHub,
-  onPayload: (payload) => {
-    maybeCacheSessionInfoFromEvent(payload);
-    void maybeSendPushForTrigger(payload);
+  onPayload: (payload, { spaceId }) => {
+    maybeCacheSessionInfoFromEvent(payload, { spaceId });
+    void maybeSendPushForTrigger(payload, { spaceId });
     sessionRuntime.processOpenCodeSsePayload(payload);
   },
+  // Turns already running when the stream (re)connects sent no start this
+  // server saw; OpenCode's running list names them.
+  onConnect: async () => {
+    const readAt = Date.now();
+    const statuses = await createSessionActivityProbe({ buildOpenCodeUrl, getOpenCodeAuthHeaders }).fetchActiveSessionStatuses();
+    if (statuses) sessionRuntime.adoptRunningSessions(Object.keys(statuses), readAt);
+  },
+});
+
+// A folder is checked once each time OpenCode opens it: the trust answer
+// holds until OpenCode reports the folder closed. While the stream is down
+// closings go unreported, so answers fall back to a short life, and a new
+// connection starts them over.
+globalMessageStreamHub.subscribeEvent((event) => {
+  if (event?.payload?.type !== 'location.shutdown') return;
+  const directory = event.payload.location?.directory ?? event.directory;
+  if (directory && directory !== 'global') void openCodeTrust.forget(directory);
+});
+globalMessageStreamHub.subscribeStatus((status) => {
+  if (status?.type === 'connect') openCodeTrust.followLocations(true);
+  else if (status?.type === 'disconnect' || status?.type === 'error') openCodeTrust.followLocations(false);
 });
 
 // Session-assist subscribes to the hub directly: it needs the envelope's
@@ -1104,11 +1384,13 @@ globalMessageStreamHub.subscribeEvent((event) => {
       agentToolRuntime?.abortSession?.(payload.properties.sessionID);
     }
     sessionLineage.observe(payload);
+    turnDurationRecorder.processPayload(payload, directory || payload.properties?.directory || '');
     sessionAssistRuntime.processPayload(payload, directory || payload.properties?.directory || '');
     sessionWorkRuntime.processPayload(payload, directory || payload.properties?.directory || '');
     sessionGoalRuntime.processPayload(payload, directory || payload.properties?.directory || '');
     contextObligatoryRuntime.processPayload(payload, directory || payload.properties?.directory || '');
-    linearSessionStatusRuntime.processPayload(payload);
+    sessionWarmingRuntime.processPayload(payload);
+    trackerSessionStatus.processPayload(payload);
   }
 });
 
@@ -1117,18 +1399,18 @@ globalMessageStreamHub.subscribeEvent((event) => {
  * the client). The synthetic OpenChamber frames the UI also expects are derived
  * from the translated event, so the translation happens here.
  */
-const processForwardedEventPayload = (payload, emitSyntheticEvent) => {
+const processForwardedEventPayload = (payload, emitSyntheticEvent, { spaceId = null } = {}) => {
   if (!payload || typeof payload !== 'object' || typeof emitSyntheticEvent !== 'function') {
     return;
   }
 
   for (const translated of translateWireEvent(payload)) {
-    processForwardedServerEvent(translated, emitSyntheticEvent);
+    processForwardedServerEvent(translated, emitSyntheticEvent, spaceId);
   }
 };
 
-const processForwardedServerEvent = (payload, emitSyntheticEvent) => {
-  maybeCacheSessionInfoFromEvent(payload);
+const processForwardedServerEvent = (payload, emitSyntheticEvent, spaceId = null) => {
+  maybeCacheSessionInfoFromEvent(payload, { spaceId });
 
   if (payload.type !== 'session.status') {
     return;
@@ -1146,12 +1428,16 @@ const processForwardedServerEvent = (payload, emitSyntheticEvent) => {
     return;
   }
 
+  const running = status === 'busy' || status === 'retry';
   emitSyntheticEvent({
     type: 'openchamber:session-status',
     properties: {
       sessionID: sessionId,
       status,
       timestamp: Date.now(),
+      // The event that starts a turn carries its own start; it may reach this
+      // bridge before the session runtime has recorded it.
+      turnStartedAt: running ? (properties.turnStartedAt ?? sessionRuntime.getRunningTurnStart(sessionId) ?? undefined) : undefined,
       metadata: {
         attempt: typeof statusInfo.attempt === 'number'
           ? statusInfo.attempt
@@ -1163,7 +1449,6 @@ const processForwardedServerEvent = (payload, emitSyntheticEvent) => {
           ? statusInfo.next
           : (typeof info.next === 'number' ? info.next : undefined),
       },
-      needsAttention: false,
     },
   });
 
@@ -1171,7 +1456,7 @@ const processForwardedServerEvent = (payload, emitSyntheticEvent) => {
     type: 'openchamber:session-activity',
     properties: {
       sessionId,
-      phase: status === 'busy' || status === 'retry' ? 'busy' : 'idle',
+      phase: running ? 'busy' : 'idle',
     },
   });
 };
@@ -1181,11 +1466,13 @@ const serverUtilsRuntime = createServerUtilsRuntime({
   // Read lazily: the archive store is created with the session service further
   // down, while the proxy is registered later still.
   getArchivedSessions: () => openChamberSessionService.archiveStore.getAll(),
+  getUnreadBaseline: () => unreadBaseline.get(),
   getStoredSessionMetadata: () => sessionMetadataStore.listUnmigrated(),
   // Isolated spaces: with the switch on, the session list carries every space's sessions and
   // the global SSE stream their events. Called, not captured: the host is made in `main`.
   getMergeSpaceSessionList: () => (spacesHost ? (payload) => spacesHost.mergeSessionList(payload) : null),
   getSpaceEventHub: () => (spacesHost ? globalMessageStreamHub : null),
+  openCodeTrust,
   fs,
   os,
   path,
@@ -1231,6 +1518,27 @@ const setOpenCodePort = (...args) => serverUtilsRuntime.setOpenCodePort(...args)
 const waitForOpenCodePort = (...args) => serverUtilsRuntime.waitForOpenCodePort(...args);
 const buildAugmentedPath = (...args) => serverUtilsRuntime.buildAugmentedPath(...args);
 const buildManagedOpenCodePath = (...args) => serverUtilsRuntime.buildManagedOpenCodePath(...args);
+
+// Variables from Settings for the processes OpenChamber starts: the managed
+// OpenCode, Git, the terminal and command execution (lib/environment).
+const environmentStore = createEnvironmentStore({
+  filePath: path.join(OPENCHAMBER_USER_CONFIG_ROOT, 'environment.json'),
+});
+const listConfiguredProjects = async () => {
+  const settings = await readSettingsFromDiskMigrated();
+  return sanitizeProjects(settings?.projects || []);
+};
+const environmentRuntime = createEnvironmentRuntime({
+  store: environmentStore,
+  listProjects: listConfiguredProjects,
+  spawn,
+  // The terminal's PATH: a packaged server starts with a minimal one, where
+  // direnv, devenv or nix would not be found.
+  commandBaseEnv: () => ({ ...process.env, PATH: buildAugmentedPath() }),
+  readOpenCodeServiceEnv: () => readOpenCodeServiceEnv(OPENCODE_CONFIG_DIR),
+  isEnterpriseMode: () => isEnterpriseMode(),
+});
+configureGitEnvironment(environmentRuntime);
 const parseSseDataPayload = (...args) => serverUtilsRuntime.parseSseDataPayload(...args);
 const staticRoutesRuntime = createStaticRoutesRuntime({
   fs,
@@ -1244,6 +1552,8 @@ const staticRoutesRuntime = createStaticRoutesRuntime({
   readSettingsFromDiskMigrated,
   normalizePwaAppName,
   normalizePwaOrientation,
+  // uiAuthController is created at startup, after this runtime: read it per request.
+  isRequestAuthorized: (req, res) => isRequestAuthorized(req, res, { tunnelAuthController, uiAuthController }),
 });
 const remoteClientAuthRuntime = createRemoteClientAuthRuntime({
   fsPromises,
@@ -1260,6 +1570,7 @@ const clientPairingRuntime = createClientPairingRuntime({
 });
 const featureRoutesRuntime = createFeatureRoutesRuntime({
   clientReloadDelayMs: CLIENT_RELOAD_DELAY_MS,
+  trackers: trackerRegistry,
 });
 const bootstrapRuntime = createBootstrapRuntime({
   createUiAuth,
@@ -1288,8 +1599,6 @@ const tunnelWiringRuntime = createTunnelWiringRuntime({
   isSupportedTunnelMode,
   upsertManagedRemoteTunnelToken,
   resolveManagedRemoteTunnelToken,
-  TUNNEL_MODE_QUICK,
-  TUNNEL_MODE_MANAGED_LOCAL,
   TUNNEL_MODE_MANAGED_REMOTE,
   TUNNEL_PROVIDER_CLOUDFLARE,
   TunnelServiceError,
@@ -1387,8 +1696,19 @@ const openCodeLifecycleRuntime = createOpenCodeLifecycleRuntime({
         directories.push(project.path);
       }
     }
-    return [...new Set(directories)];
+    // A deleted project would fail every read scoped to it, and the first entry
+    // also scopes server-side reads that have no directory of their own.
+    // Warming a folder runs its OpenCode plugins, so only trusted ones warm;
+    // the rest wait for the user to open them.
+    const existing = await Promise.all([...new Set(directories)].map(async (directory) => (
+      (await fs.promises.stat(directory).catch(() => null))?.isDirectory()
+        && await openCodeTrust.isTrusted(directory).catch(() => false)
+        ? directory
+        : null
+    )));
+    return existing.filter(Boolean);
   },
+  noProjectDirectory: OPENCHAMBER_CHATS_DIR,
   // A managed restart can move OpenCode to a NEW port (the old one may stay
   // occupied if killProcessOnPort/waitForPortRelease didn't free it in time,
   // on any platform). Rebind the message-stream upstream readers to the current port
@@ -1423,7 +1743,20 @@ const openCodeLifecycleRuntime = createOpenCodeLifecycleRuntime({
     }
   },
   getManagedOpenCodeEnv: async () => (managedConfigRuntime ? managedConfigRuntime.buildManagedChildEnv() : {}),
+  getUserEnvironment: () => environmentRuntime.forOpenCode(),
 });
+
+// Quota lookups, voice keys and routing read provider credentials from the
+// running OpenCode (`GET /api/credential`), plus the values of the variables a
+// managed OpenCode takes keys from, read from the environment it was given.
+configureOpenCodeCredentials(openCodeCredentialSource({
+  buildOpenCodeUrl,
+  getOpenCodeAuthHeaders,
+  getLaunchEnvironment: () => openCodeLifecycleRuntime.getManagedOpenCodeProcessEnv(),
+  getDefaultDirectory: () => openCodeLifecycleRuntime.getDefaultOpenCodeDirectory(),
+}));
+// A new worktree runs the start command OpenCode keeps on the project record.
+configureProjectStartCommandSource(openCodeProjectStartCommandSource({ buildOpenCodeUrl, getOpenCodeAuthHeaders }));
 
 const getOpenCodeCompatibility = async () => {
   if (isExternalOpenCode || ENV_SKIP_OPENCODE_START) {
@@ -1434,7 +1767,9 @@ const getOpenCodeCompatibility = async () => {
   const binary = ensureOpencodeCliEnv();
   const installation = isBundledOpenCodeCliPath(binary) ? 'bundled' : 'managed';
   const version = await readOpenCodeCliVersion(resolveManagedOpenCodeLaunchSpec(binary)).catch(() => null);
-  return describeOpenCodeCompatibility(version, installation, supportsOpenCodeV2Install());
+  // A CLI pinned by the administrator is theirs to replace, never ours.
+  const pinnedByPolicy = Boolean(readEnterprisePolicy().opencodeBinary);
+  return describeOpenCodeCompatibility(version, installation, supportsOpenCodeV2Install() && !pinnedByPolicy, binary || null);
 };
 
 const getOpenCodeUpgradeCapability = () => {
@@ -1446,6 +1781,7 @@ const getOpenCodeUpgradeCapability = () => {
     hasManagedProcess: Boolean(openCodeProcess),
     activeBinary,
     isBundledBinary: isBundledOpenCodeCliPath,
+    pinnedByPolicy: Boolean(readEnterprisePolicy().opencodeBinary),
   });
 };
 
@@ -1470,6 +1806,7 @@ const scheduledTasksRuntime = createScheduledTasksRuntime({
         writeSseEvent(client, {
           type: 'openchamber:scheduled-task-ran',
           properties: {
+
             taskId: event.taskID,
             ranAt: event.ranAt,
             status: event.status,
@@ -1524,7 +1861,9 @@ const emitAgentMemoryChangedEvent = (event) => {
   for (const client of uiOpenChamberEventClients) {
     try {
       writeSseEvent(client, {
-        type: 'openchamber:service-memory-changed',
+        // The UI listens for exactly this name (`lib/openchamberEvents.ts`);
+        // under any other name the Memory panel only catches up on reload.
+        type: 'openchamber:agent-memory-changed',
         properties: {
           scope: event.scope,
           ...(event.projectId ? { projectId: event.projectId } : {}),
@@ -1573,13 +1912,18 @@ const openChamberSessionService = createOpenChamberSessionService({
   waitForOpenCodeReady,
   emitSessionCreatedEvent,
   sessionKnowledgeRuntime,
-  // OpenCode 2.x has no archive route, so the state is OpenChamber's own and
-  // lives beside the instance it describes.
+  worktreeBootstrapStore,
+  hydrateWorktreeCheckout: featureRoutesRuntime.hydrateBoundCheckout,
+  createChangeRequestWorktree: featureRoutesRuntime.createChangeRequestWorktree,
+  // Holds the archive file (`session-archive.js`) beside the instance it describes.
   dataDir: OPENCHAMBER_DATA_DIR,
+  getDefaultOpenCodeDirectory: () => openCodeLifecycleRuntime.getDefaultOpenCodeDirectory(),
   sessionMetadataStore,
   persistSessionMetadata: persistSessionMetadataPatch,
+  updateSessionMetadata: updateSessionMetadataWith,
   broadcastGlobalUiEvent: broadcastOpenChamberUiEvent,
   resolveAutoSelection: (input) => routingRuntime.resolveAutoSelection(input),
+  isAutoReady: async () => (await routingRuntime.describe()).autoReady,
 });
 // After a restart requested through the desktop endpoint, the fresh instance
 // posts one line into the most recently active session so the user can see the
@@ -1614,6 +1958,7 @@ const browserControlBroker = createBrowserControlBroker({
             requestId: request.requestId,
             action: request.action,
             parameters: request.parameters,
+            context: request.context,
           },
         });
         delivered += 1;
@@ -1687,10 +2032,59 @@ const openChamberControlService = createOpenChamberControlService({
   buildOpenCodeUrl,
   getOpenCodeAuthHeaders,
   waitForOpenCodeReady,
+  isOpenCodeDirectoryTrusted: (directory) => openCodeTrust.isTrusted(directory),
   sessionService: openChamberSessionService,
   scheduledTaskService,
   browserControl: browserControlRouter,
   fileOpen: fileOpenRequester,
+  projectContextRuntime,
+  // The resolver session knowledge reads pinned notes and plans through, so
+  // what an agent writes is what the next session is given.
+  resolveProjectContextId: resolveMemoryProjectId,
+  // On by default; a plugin generated before it was switched off must not
+  // keep writing.
+  // Like file.open: every connected window hears it, the ones showing that
+  // project open the plan.
+  showPlan: (request) => {
+    let delivered = 0;
+    for (const client of uiOpenChamberEventClients) {
+      try {
+        writeSseEvent(client, { type: 'openchamber:plan-open-request', properties: request });
+        delivered += 1;
+      } catch {
+        uiOpenChamberEventClients.delete(client);
+      }
+    }
+    return delivered;
+  },
+  isKnowledgeToolEnabled: async () => {
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return settings?.agentKnowledgeToolEnabled !== false;
+  },
+  // On by default, like knowledge.
+  isRenderToolEnabled: async () => {
+    const settings = await readSettingsFromDiskMigrated().catch(() => null);
+    return settings?.agentRenderToolEnabled !== false;
+  },
+  // A page that waits for the user's answer shows the session as waiting
+  // the way a form does: the pending list the clients seed from, a live event
+  // for the clients already connected, and the "Input needed" notification.
+  onPageWaitChange: (change) => {
+    sessionRuntime.trackWaitingPage(change);
+    if (change.type === 'waiting') {
+      const payload = {
+        type: 'openchamber:page-waiting',
+        properties: { sessionID: change.sessionId, directory: change.directory, page: { id: change.callId, title: change.title } },
+      };
+      broadcastOpenChamberUiEvent(payload);
+      void maybeSendPushForTrigger(payload);
+      return;
+    }
+    broadcastOpenChamberUiEvent({
+      type: 'openchamber:page-settled',
+      properties: { sessionID: change.sessionId, pageID: change.callId },
+    });
+  },
   // The tool is off by default; a plugin generated before it was switched off
   // must not keep paging the user.
   notifyUser: async (input) => {
@@ -1707,6 +2101,21 @@ const openChamberControlService = createOpenChamberControlService({
     isAgentMemoryEnabled,
     resolveProjectId: resolveMemoryProjectId,
   }),
+  sessionLinks: createSessionLinker({
+    trackers: trackerRegistry,
+    updateMetadata: updateSessionMetadataWith,
+    createError: (message, status) => new OpenChamberControlError(message, status),
+  }),
+  workNaming: {
+    listWorktrees: getWorktrees,
+    setWorktreeTaskTitle,
+    readPlaceholderBranch: (directory) => readRenameableGeneratedBranch(directory),
+    renamePlaceholderBranch: renameGeneratedWorktreeBranch,
+    updateMetadata: updateSessionMetadataWith,
+  },
+  dispatchResults: dispatchResultsRuntime,
+  workflowRuntime,
+  archiveStore: openChamberSessionService.archiveStore,
 });
 
 const ensureGlobalWatcherStarted = async () => {
@@ -1738,13 +2147,15 @@ const bootstrapOpenCodeAtStartup = async (...args) => {
   void waitForOpenCodeReady()
     .then(() => sessionMetadataStore.migrateLegacy())
     .catch((error) => console.warn('[openchamber-sessions] session metadata migration failed:', error?.message ?? error));
+  // Archive state written before OpenCode 2.1 held it moves to OpenCode in one
+  // pass that unloads the projects it had to start (`session-archive.js`).
+  void waitForOpenCodeReady()
+    .then(() => openChamberSessionService.sessionArchive.migrateLegacy())
+    .catch((error) => console.warn('[openchamber-sessions] session archive migration failed:', error?.message ?? error));
 };
 const killProcessOnPort = (...args) => openCodeLifecycleRuntime.killProcessOnPort(...args);
 const waitForPortRelease = (...args) => openCodeLifecycleRuntime.waitForPortRelease(...args);
 
-const fetchAgentsSnapshot = (...args) => serverUtilsRuntime.fetchAgentsSnapshot(...args);
-const fetchProvidersSnapshot = (...args) => serverUtilsRuntime.fetchProvidersSnapshot(...args);
-const fetchModelsSnapshot = (...args) => serverUtilsRuntime.fetchModelsSnapshot(...args);
 const setupProxy = (...args) => serverUtilsRuntime.setupProxy(...args);
 const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   process,
@@ -1760,7 +2171,11 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
   sessionWorkRuntime,
   sessionGoalRuntime,
   contextObligatoryRuntime,
+  sessionWarmingRuntime,
   messageQueueRuntime,
+  dispatchResultsRuntime,
+  workflowRuntime,
+  messageSearchRuntime,
   sessionRuntime,
   getHealthCheckInterval: () => healthCheckInterval,
   clearHealthCheckInterval: (value) => clearInterval(value),
@@ -1804,18 +2219,22 @@ const gracefulShutdownRuntime = createGracefulShutdownRuntime({
 const gracefulShutdown = (...args) => gracefulShutdownRuntime.gracefulShutdown(...args);
 
 async function main(options = {}) {
-  beginGuestServiceHost();
+  beginGuestServiceHost({ registryDir: guestServiceRegistryDir(OPENCHAMBER_DATA_DIR) });
+  // Again at start: the desktop shell merges the login shell's environment,
+  // where proxy variables often live, after this module first loaded.
+  applyOutboundProxyFromEnv();
   const port = Number.isFinite(options.port) && options.port >= 0 ? Math.trunc(options.port) : DEFAULT_PORT;
   const host = typeof options.host === 'string' && options.host.length > 0 ? options.host : undefined;
   const effectiveBindHost = host
     || (typeof process.env.OPENCHAMBER_HOST === 'string' && process.env.OPENCHAMBER_HOST.trim().length > 0
       ? process.env.OPENCHAMBER_HOST.trim()
       : '127.0.0.1');
+  const instanceDir = await prepareInstanceDir({ fsPromises, path, dataDir: OPENCHAMBER_DATA_DIR });
   agentToolRuntime = createAgentToolRuntime({
     crypto,
     fsPromises,
     path,
-    dataDir: OPENCHAMBER_DATA_DIR,
+    instanceDir,
     env: process.env,
     executeAction: (...args) => openChamberControlService.execute(...args),
     // A v2 tool call carries no directory, only the session it runs in.
@@ -1827,15 +2246,26 @@ async function main(options = {}) {
     // A pipe listener reports a string here, which has no address to bind back to.
     getActiveHost: () => server?.address?.()?.address ?? null,
   });
+  limitFailoverRuntime = createLimitFailoverRuntime({
+    fsPromises,
+    path,
+    instanceDir,
+    readSettings: () => readSettingsFromDiskMigrated(),
+    authorizeRequest: (req) => agentToolRuntime.authorizeRequest(req),
+    broadcastUiEvent: (event) => broadcastOpenChamberUiEvent(event),
+  });
   managedConfigRuntime = createManagedConfigRuntime({
     fsPromises,
     path,
-    dataDir: OPENCHAMBER_DATA_DIR,
+    instanceDir,
     env: process.env,
     agentToolRuntime,
+    limitFailoverRuntime,
     readSettings: () => readSettingsFromDiskMigrated(),
     isAgentMemoryAvailable: isAgentMemoryFeatureAvailable,
+    isWorkflowAvailable: isWorkflowFeatureAvailable,
   });
+  await ensureChatsDir({ fsPromises, chatsDir: OPENCHAMBER_CHATS_DIR, warn: (message) => console.warn(`[data-dir] ${message}`) });
 
   // Pairing transports advertised to the create-device dialog. LAN reachability is
   // derived from the SERVER's actual bind (a wildcard bind → the machine's LAN IP;
@@ -1851,9 +2281,13 @@ async function main(options = {}) {
     if (address.startsWith('127.')) return null;
     return address;
   };
+  const advertisedLanUrl = readAdvertisedLanUrl();
   const resolvePairingTransports = (req) => {
     const activePort = tunnelRuntimeContext.getActivePort() || port;
     const local = `http://127.0.0.1:${activePort}`;
+    if (advertisedLanUrl) {
+      return { local, lan: advertisedLanUrl, relayAvailable: !relayBlockedByEnterprise() };
+    }
     let lanHost = null;
     if (isNetworkExposedBindHost(effectiveBindHost)) {
       // Prefer the address the client is ALREADY talking to us on — it is the
@@ -1889,6 +2323,7 @@ async function main(options = {}) {
   // interface. A client that paired while the machine had a different DHCP
   // lease uses this to replace its stale LAN candidate.
   const resolveDirectLanUrls = (req) => {
+    if (advertisedLanUrl) return [advertisedLanUrl];
     const activePort = tunnelRuntimeContext.getActivePort() || port;
     const urls = [];
     const push = (host) => {
@@ -1982,7 +2417,7 @@ async function main(options = {}) {
   const sayTTSCapability = detectSayTtsCapability(process);
 
   // The chats of deleted spaces, imported into the host's OpenCode and kept read-only there
-  // (DESIGN.md, decision 9). It reads a folder of the data directory and runs nothing else, so it
+  // (decision 9). It reads a folder of the data directory and runs nothing else, so it
   // exists with the switch on or off: an archived chat must stay read-only either way.
   const hostOpenCodeClient = () => createOpenCodeClient({
     baseUrl: buildOpenCodeUrl('/', '').replace(/\/$/, ''),
@@ -1998,9 +2433,15 @@ async function main(options = {}) {
 
   // The isolated-spaces switch, read here at start and changed live through its route below.
   // While it is off the feature has no place, no manager, no route and runs no `docker`.
-  const buildSpacesHost = () => createSpacesHost({
+  const buildSpacesHost = async () => createSpacesHost({
     dataDir: OPENCHAMBER_DATA_DIR,
     dockerPath: searchPathFor('docker', buildAugmentedPath()) ?? 'docker',
+    // The machine of the Docker over SSH place, when the settings name one.
+    sshDockerHost: dockerHostOf((await readSettingsFromDiskMigrated().catch(() => null))?.isolatedSpacesSshHost),
+    // Only for a clean-up of the spaces' disk on Colima, to give the freed space back; null without it.
+    colimaPath: searchPathFor('colima', buildAugmentedPath()),
+    // For getting Docker ready on this computer: brew, colima, asked again at every look.
+    findProgram: (name) => searchPathFor(name, buildAugmentedPath()) ?? null,
     gitPath: searchPathFor('git', buildAugmentedPath()) ?? 'git',
     // git starts `docker exec` itself when code moves in or out, so its PATH must find docker.
     hostEnvironment: { ...process.env, PATH: buildAugmentedPath() },
@@ -2011,12 +2452,15 @@ async function main(options = {}) {
     },
     readIdleStop: async () => readIdleStopSetting((await readSettingsFromDiskMigrated())?.isolatedSpacesIdleStop),
     saveIdleStop: (setting) => persistSettings({ isolatedSpacesIdleStop: setting }),
+    readPermissionDefault: async () => permissionDefaultOf((await readSettingsFromDiskMigrated())?.permissionDefaultMode),
     archive: spaceArchive,
+    // What the host says to the login issuer when it renews a browser login for a space.
+    userAgent: `OpenChamber/${OPENCHAMBER_VERSION}`,
   });
   const startupSettings = await readSettingsFromDiskMigrated().catch(() => null);
   if (startupSettings?.isolatedSpacesEnabled === true) {
     try {
-      spacesHost = buildSpacesHost();
+      spacesHost = await buildSpacesHost();
     } catch (error) {
       // The feature is absent then, and the rest of the server starts as with the switch off.
       console.error(`[spaces] isolated spaces are unavailable this start: ${error?.code ?? ''} ${error?.message ?? error}`.trim());
@@ -2032,14 +2476,34 @@ async function main(options = {}) {
     'http://localhost',
     'https://localhost',
   ]);
-  const isLocalDevClientOrigin = (origin) => /^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin);
-  app.set('trust proxy', true);
+  const allowLocalDevOrigins = allowsLocalDevOrigins(process.env);
+  // Keeps other sites from framing the app (clickjacking). Routes that serve
+  // untrusted documents set a Content-Security-Policy of their own, which
+  // replaces this one.
+  const frameAncestorsPolicy = buildFrameAncestorsPolicy({
+    allowLocalDevOrigins,
+    extra: process.env.OPENCHAMBER_FRAME_ANCESTORS,
+  });
+  // Forwarded headers are believed only from a proxy on this machine or a
+  // private network (cloudflared, Docker, a LAN reverse proxy). From anyone
+  // else they are the client's own words, and the login rate limit keys on
+  // req.ip, so a client must not be able to name its own address.
+  app.set('trust proxy', 'loopback, linklocal, uniquelocal');
   // Keep self-hosted instances out of search engines. The app shell is served
   // publicly (it loads before prompting for the UI password), so without this
   // even a password-protected instance gets crawled and indexed. Applies to
   // every response; the robots.txt route makes the intent explicit for crawlers.
-  app.use((_req, res, next) => {
+  app.use((req, res, next) => {
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    // The preview proxy relays a dev server's own pages, whose types and
+    // referrer behaviour are that app's business. Everything else is ours:
+    // served with real types, and its address (a tunnel host, short-lived
+    // auth tokens, session ids) never follows a link out as a Referer.
+    if (!req.path.startsWith('/api/preview/proxy/')) {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Referrer-Policy', 'same-origin');
+      res.setHeader('Content-Security-Policy', frameAncestorsPolicy);
+    }
     next();
   });
   app.get('/robots.txt', (_req, res) => {
@@ -2047,14 +2511,14 @@ async function main(options = {}) {
   });
   app.use((req, res, next) => {
     const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
-    if (packagedClientOrigins.has(origin) || isLocalDevClientOrigin(origin)) {
+    if (packagedClientOrigins.has(origin) || (allowLocalDevOrigins && isLocalDevClientOrigin(origin))) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Credentials', 'true');
       res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
       // The packaged desktop UI (openchamber-ui://) and the dev UI sit on a
       // different origin, so every custom request header must be listed here or
       // the browser refuses the request at preflight, before it reaches a route.
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,X-Requested-With,Cache-Control,X-OpenCode-Directory,X-OpenCode-Directory-Encoding,Ngrok-Skip-Browser-Warning,X-OpenChamber-Surface');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,Accept,X-Requested-With,Cache-Control,X-OpenCode-Directory,X-OpenCode-Directory-Encoding,Ngrok-Skip-Browser-Warning,X-OpenChamber-Surface,X-OpenChamber-Provider,X-OpenChamber-Model,X-OpenChamber-Part-Shells');
       res.setHeader('Access-Control-Expose-Headers', 'x-next-cursor');
       res.setHeader('Vary', 'Origin');
       if (req.method === 'OPTIONS') {
@@ -2091,6 +2555,7 @@ async function main(options = {}) {
     runtimeName: process.env.OPENCHAMBER_RUNTIME || 'web',
     serverStartedAt,
     gracefulShutdown,
+    readOpenCodeLoad: () => readOpenCodeLoad({ buildOpenCodeUrl, getOpenCodeAuthHeaders }),
     getHealthSnapshot: () => {
       const launchSpec = resolvedOpencodeBinary && !useWslForOpencode
         ? resolveManagedOpenCodeLaunchSpec(resolvedOpencodeBinary)
@@ -2120,7 +2585,6 @@ async function main(options = {}) {
         nodeBinaryResolved: resolvedNodeBinary || null,
         bunBinaryResolved: resolvedBunBinary || null,
         desktopNotifyEnabled: ENV_DESKTOP_NOTIFY,
-        planModeExperimentalEnabled: PLAN_MODE_EXPERIMENT_ENABLED,
         apiOnly,
       };
     },
@@ -2197,6 +2661,7 @@ async function main(options = {}) {
     getCachedZenModels,
     setAutoAcceptSession,
     agentToolRuntime,
+    limitFailoverRuntime,
     desktopUpdater,
     commandcodeModelsNotice: commandcodeModelsNoticeRuntime,
     emitCommandcodeModelsUpdatedEvent,
@@ -2209,11 +2674,14 @@ async function main(options = {}) {
   // An archived chat of a deleted space is read and deleted, never run or changed.
   app.use(spaceArchive.guard);
   app.use((req, res, next) => (spacesHost ? spacesHost.middleware(req, res, next) : next()));
-  server.on('upgrade', (...args) => { spacesHost?.upgradeHandler(...args); });
+  // First of all upgrade handlers: a socket addressed to a space by its directory carries a path
+  // a host handler would take too, and the space's handler marks it as the space's before they run.
+  server.prependListener('upgrade', (...args) => { spacesHost?.upgradeHandler(...args); });
   const startSpacesHost = (host) => {
     host.prepareUpgrades({ uiAuthController, isRequestOriginAllowed });
-    // Every space's events join the host's hub, and the host asks each space for its live status.
-    void host.startEvents(globalMessageStreamHub).catch((error) => {
+    // Every space's events join the host's hub, and the host asks each space for its live status;
+    // each space's queue changes and permission modes reach the browsers on the streams the host's own use.
+    void host.startEvents(globalMessageStreamHub, { broadcastUiEvent: broadcastOpenChamberUiEvent, broadcastGlobalUiEvent: broadcastPermissionUiEvent }).catch((error) => {
       console.warn(`[spaces] could not follow the spaces: ${error?.message ?? error}`);
     });
   };
@@ -2224,12 +2692,15 @@ async function main(options = {}) {
     buildHost: buildSpacesHost,
     startHost: startSpacesHost,
     persist: (enabled) => persistSettings({ isolatedSpacesEnabled: enabled }),
+    persistMachine: (machine) => persistSettings({ isolatedSpacesSshHost: machine }),
   });
   registerSpaceRoutes(app, {
     getJourney: () => spacesHost?.journey ?? null,
     getPlaces: () => spacesHost?.places() ?? [],
+    getDockerSetup: () => (spacesHost ? { placeId: spacesHost.localPlaceId, setup: spacesHost.dockerSetup } : null),
     readSwitch: spacesSwitch.readSwitch,
     setSwitch: spacesSwitch.setSwitch,
+    setMachine: spacesSwitch.setMachine,
     getArchive: () => spaceArchive,
   });
   realtimeProxyRuntime = attachRealtimeProxy({
@@ -2252,7 +2723,7 @@ async function main(options = {}) {
     os,
     readSettingsFromDiskMigrated,
     writeSettingsToDisk,
-    readSettingsStrict: readSettingsFromDiskStrict,
+    relayKeyStore,
     remoteClientAuthRuntime,
     getLocalPort: () => tunnelRuntimeContext.getActivePort(),
     // One relay host per machine: every instance sharing this data dir shares
@@ -2311,6 +2782,11 @@ async function main(options = {}) {
   });
 
   await featureRoutesRuntime.registerRoutes(app, {
+    environmentStore,
+    environmentRuntime,
+    listConfiguredProjects,
+    messageSearchRuntime,
+    sessionWarmingRuntime,
     crypto,
     fs,
     os,
@@ -2365,6 +2841,12 @@ async function main(options = {}) {
     // Dev-server discovery must not offer OpenChamber's own listeners back to
     // the user as something to preview.
     getOwnPorts: () => [port, openCodePort].filter((value) => Number.isInteger(value) && value > 0),
+    getActivePort: () => {
+      const address = server?.address?.();
+      return address && Number.isInteger(address.port) ? address.port : null;
+    },
+    // A pipe listener reports a string here, which has no address to bind back to.
+    getActiveHost: () => server?.address?.()?.address ?? null,
     devServerScanner,
     buildAugmentedPath,
     projectConfigRuntime,
@@ -2380,9 +2862,12 @@ async function main(options = {}) {
     emitSessionCreatedEvent,
     getOpenChamberEventClients: () => uiOpenChamberEventClients,
     writeSseEvent,
+    globalEventHub: globalMessageStreamHub,
     permissionAutoAcceptRuntime,
+    worktreeBootstrapStore,
     messageQueueRuntime,
     routingRuntime,
+    workflowRuntime,
   });
 
   // After bootstrap: the upgrade gate needs the real UI auth controller.
@@ -2417,9 +2902,17 @@ async function main(options = {}) {
     terminalHeartbeatIntervalMs: TERMINAL_INPUT_WS_HEARTBEAT_INTERVAL_MS,
     terminalRebindWindowMs: TERMINAL_INPUT_WS_REBIND_WINDOW_MS,
     terminalMaxRebindsPerWindow: TERMINAL_INPUT_WS_MAX_REBINDS_PER_WINDOW,
+    environmentRuntime,
     setupProxy,
     scheduleOpenCodeApiDetection,
     bootstrapOpenCodeAtStartup,
+    // Git's credential helper reaches the server through a file that names
+    // the port, so it is written once the port is known and before OpenCode,
+    // whose shells will use it, starts.
+    onListenerReady: async () => {
+      try { await featureRoutesRuntime.publishRepositoryCredentialEndpoint(); }
+      catch (error) { console.warn('Git credential helper endpoint was not published:', error instanceof Error ? error.message : String(error)); }
+    },
     triggerHealthCheck,
     staticRoutesRuntime,
     process,
@@ -2471,7 +2964,7 @@ async function main(options = {}) {
   relayReconcileTimer.unref?.();
 
   // The server inside an isolated space stops itself after the user's idle hours, and the space's
-  // container with it (DESIGN.md, decision 11). Only a space's environment names the setting's
+  // container with it (decision 11). Only a space's environment names the setting's
   // file, so this never runs anywhere else. The exit code tells the host why it stopped.
   const spaceIdleStopFile = process.env.OPENCHAMBER_SPACE_IDLE_STOP_FILE;
   if (spaceIdleStopFile) {

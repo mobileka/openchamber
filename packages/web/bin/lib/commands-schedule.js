@@ -163,6 +163,11 @@ async function scheduleCommand(options = {}, action = 'help') {
     const taskID = assertRequired(options.task, '--task');
     const enabled = action === 'enable';
     const { task } = await requestControlAction(port, 'schedule.toggle', { taskId: taskID, disabled: !enabled }, options);
+    // The loop file is the source; a write that did not take leaves the saved
+    // state unchanged, and reporting success would be a lie.
+    if (task?.enabled !== enabled) {
+      throw new TunnelCliError(`${task?.name || taskID} is still ${task?.enabled === false ? 'disabled' : 'enabled'}.`);
+    }
     if (isJsonMode(options)) {
       printJson({ task, enabled });
       return;

@@ -19,6 +19,12 @@ export type ChatQuoteAnchor = {
     suffix: string;
     /** Stream offset at capture time; a tie-breaker, not a position. */
     start: number;
+    /**
+     * Set when the text lives in a page the agent showed (`openchamber_render`)
+     * instead of the message's own text: the stream is then that page's body,
+     * measured and re-found inside its frame. Anchors without it are unchanged.
+     */
+    page?: { partId: string };
 };
 
 export const chatQuoteAnchorSchema = z.object({
@@ -26,8 +32,10 @@ export const chatQuoteAnchorSchema = z.object({
     prefix: z.string(),
     suffix: z.string(),
     start: z.number(),
+    page: z.object({ partId: z.string() }).optional(),
 });
 
+// The page bootstrap (message/parts/htmlRender.ts) repeats both numbers.
 const CONTEXT_LENGTH = 32;
 const MAX_OCCURRENCES = 200;
 
@@ -109,7 +117,7 @@ function collectTextNodes(node: Node, into: Text[]): Text[] {
  * data of every descendant Text node in document order). Shared by quote
  * anchoring and chat find highlighting.
  */
-export function rangeFromStreamOffsets(root: Node, start: number, end: number): Range | null {
+function rangeFromStreamOffsets(root: Node, start: number, end: number): Range | null {
     if (start < 0 || end < start) return null;
     const documentRef = root.ownerDocument;
     if (!documentRef) return null;

@@ -12,16 +12,17 @@ import {
   getEffectiveShortcutPrefix,
   UNASSIGNED_SHORTCUT,
   type ShortcutActionId,
-  type ShortcutCategory,
   type ShortcutCombo,
   type CustomizableShortcutAction,
 } from '@/lib/shortcuts';
 import { useI18n } from '@/lib/i18n';
 import { rankVisibleShortcutActions } from './shortcutFiltering';
+import { shortcutSearchItemId } from '@/lib/settings/search';
+import { getDesktopMiniChatGlobalShortcut, getDesktopQuakeMode, setDesktopMiniChatGlobalShortcut, setDesktopQuakeModeShortcut } from '@/lib/desktop';
 import { ShortcutRecordingDialog } from './ShortcutRecordingDialog';
 import { ShortcutSearchDialog } from './ShortcutSearchDialog';
 
-const CATEGORIES: ShortcutCategory[] = ['session', 'models', 'panels', 'navigation', 'application'];
+const CATEGORIES = ['session', 'models', 'panels', 'navigation', 'application'] as const;
 
 export const KeyboardShortcutsSettings: React.FC = () => {
   const { t } = useI18n();
@@ -33,6 +34,28 @@ export const KeyboardShortcutsSettings: React.FC = () => {
   const [searchQuery, setSearchQuery] = React.useState('');
   const [shortcutFilter, setShortcutFilter] = React.useState<ShortcutCombo | null>(null);
   const [isShortcutSearchOpen, setShortcutSearchOpen] = React.useState(false);
+  // The OS-level Mini Chat combo lives in the desktop setting, not in
+  // shortcutOverrides; feed it to the recorder as a conflict source.
+  const [globalMiniChatCombo, setGlobalMiniChatCombo] = React.useState<ShortcutCombo | null>(null);
+  const refreshGlobalMiniChatCombo = React.useCallback(() => {
+    void getDesktopMiniChatGlobalShortcut()
+      .then((status) => setGlobalMiniChatCombo(status?.combo ?? null))
+      .catch(() => {});
+  }, []);
+  React.useEffect(() => {
+    refreshGlobalMiniChatCombo();
+  }, [refreshGlobalMiniChatCombo]);
+  // Same for the OS-level Quake Mode combo: without it as a conflict source,
+  // an in-app action could silently take over the Quake hotkey here.
+  const [globalQuakeCombo, setGlobalQuakeCombo] = React.useState<ShortcutCombo | null>(null);
+  const refreshGlobalQuakeCombo = React.useCallback(() => {
+    void getDesktopQuakeMode()
+      .then((status) => setGlobalQuakeCombo(status?.combo ?? null))
+      .catch(() => {});
+  }, []);
+  React.useEffect(() => {
+    refreshGlobalQuakeCombo();
+  }, [refreshGlobalQuakeCombo]);
 
   const actions = React.useMemo(() => getCustomizableShortcutActions(), []);
 
@@ -66,9 +89,23 @@ export const KeyboardShortcutsSettings: React.FC = () => {
     replaceActionId?: ShortcutActionId,
   ) => {
     const nextOverrides = { ...shortcutOverrides, [actionId]: combo };
-    if (replaceActionId) nextOverrides[replaceActionId] = UNASSIGNED_SHORTCUT;
     setShortcutOverride(actionId, combo);
-    if (replaceActionId) setShortcutOverride(replaceActionId, UNASSIGNED_SHORTCUT);
+    if (replaceActionId === 'mini_chat_global') {
+      // Releasing the OS-level Mini Chat combo goes through the desktop
+      // setting; the overrides only carried it as a conflict source.
+      void setDesktopMiniChatGlobalShortcut(null).then((status) => {
+        if (status) setGlobalMiniChatCombo(status.combo);
+      });
+    } else if (replaceActionId === 'quake_mode_global') {
+      // Same release path for the Quake combo. It is stored as unassigned:
+      // clearing it would bring back the default and take the combo again.
+      void setDesktopQuakeModeShortcut(UNASSIGNED_SHORTCUT).then((status) => {
+        if (status) setGlobalQuakeCombo(status.combo);
+      });
+    } else if (replaceActionId) {
+      nextOverrides[replaceActionId] = UNASSIGNED_SHORTCUT;
+      setShortcutOverride(replaceActionId, UNASSIGNED_SHORTCUT);
+    }
     persist(nextOverrides);
   };
   const resetOne = (actionId: ShortcutActionId) => {
@@ -100,13 +137,18 @@ export const KeyboardShortcutsSettings: React.FC = () => {
   };
   const formattedShortcutFilter = shortcutFilter ? formatShortcutForDisplay(shortcutFilter) : '';
 
+  // The desktop global combos join the overrides as conflict sources.
+  const recorderOverrides = { ...shortcutOverrides };
+  if (globalMiniChatCombo) recorderOverrides.mini_chat_global = globalMiniChatCombo;
+  if (globalQuakeCombo) recorderOverrides.quake_mode_global = globalQuakeCombo;
+
   return (
     <>
       <div className="mb-6 flex flex-wrap items-center gap-2">
         <div className="relative min-w-0 flex-1 basis-56 @xl:max-w-[24rem]">
           <Icon
             name="search"
-            className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+            className="pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
           />
           <Input
             value={searchQuery}
@@ -119,14 +161,14 @@ export const KeyboardShortcutsSettings: React.FC = () => {
             }}
             placeholder={t('settings.openchamber.keyboardShortcuts.search.placeholder')}
             aria-label={t('settings.openchamber.keyboardShortcuts.search.aria')}
-            className="h-8 pl-8 pr-8"
+            className="h-8 ps-8 pe-8"
           />
           {searchQuery ? (
             <button
               type="button"
               onClick={() => setSearchQuery('')}
               aria-label={t('settings.openchamber.keyboardShortcuts.search.clear')}
-              className="absolute right-1.5 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
+              className="absolute end-1.5 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-interactive-hover hover:text-foreground"
             >
               <Icon name="close" className="size-3.5" />
             </button>
@@ -187,9 +229,9 @@ export const KeyboardShortcutsSettings: React.FC = () => {
         >
           <div className="space-y-2">
             {categoryActions.map((action) => (
-              <SettingsFieldRow key={action.id} label={t(action.settingsLabelKey)}>
+              <SettingsFieldRow key={action.id} label={t(action.settingsLabelKey)} settingsItem={shortcutSearchItemId(action.id)}>
                 <kbd
-                  className="min-w-32 rounded-md border border-border bg-muted px-2 py-1 text-center typography-meta font-mono text-foreground"
+                  className="min-w-32 oc-tile-inset rounded-md px-2 py-1 text-center typography-meta text-foreground"
                 >
                   {shortcutDisplay(action)}
                 </kbd>
@@ -198,7 +240,11 @@ export const KeyboardShortcutsSettings: React.FC = () => {
                   variant="secondary"
                   size="xs"
                   className="!font-normal"
-                  onClick={() => setEditingAction(action)}
+                  onClick={() => {
+                    refreshGlobalMiniChatCombo();
+                    refreshGlobalQuakeCombo();
+                    setEditingAction(action);
+                  }}
                 >
                   {t('settings.openchamber.keyboardShortcuts.actions.edit')}
                 </Button>
@@ -221,7 +267,7 @@ export const KeyboardShortcutsSettings: React.FC = () => {
 
       <ShortcutRecordingDialog
         action={editingAction}
-        overrides={shortcutOverrides}
+        overrides={recorderOverrides}
         onSave={save}
         onOpenChange={(open) => {
           if (!open) setEditingAction(null);

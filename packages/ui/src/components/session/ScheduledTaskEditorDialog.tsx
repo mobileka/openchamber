@@ -263,7 +263,7 @@ const FieldLabel: React.FC<{
   <div className="flex items-center gap-1.5">
     <label htmlFor={htmlFor} className="typography-meta font-medium text-foreground">
       {children}
-      {required && <span className="ml-0.5 text-destructive">*</span>}
+      {required && <span className="ms-0.5 text-destructive">*</span>}
     </label>
   </div>
 );
@@ -397,7 +397,7 @@ const TimePill: React.FC<TimePillProps> = ({
     <div
       className={cn(
         'oc-surface-elevated inline-flex h-9 w-fit items-center gap-1 rounded-md border border-border bg-surface-elevated focus-within:ring-1 focus-within:ring-ring focus-within:border-ring',
-        use24Hour ? 'px-2' : 'pl-2 pr-1',
+        use24Hour ? 'px-2' : 'ps-2 pe-1',
       )}
     >
       <input
@@ -429,7 +429,7 @@ const TimePill: React.FC<TimePillProps> = ({
         <Select value={parts.meridiem} onValueChange={(next) => setPeriod(next as 'AM' | 'PM')}>
           <SelectTrigger
             aria-label={periodAriaLabel}
-            className="ml-1 h-7 w-fit border-0 bg-transparent pl-2 pr-1 shadow-none hover:bg-interactive-hover focus:ring-0"
+            className="ms-1 h-7 w-fit border-0 bg-transparent ps-2 pe-1 shadow-none hover:bg-interactive-hover focus:ring-0"
           >
             <SelectValue />
           </SelectTrigger>
@@ -716,7 +716,7 @@ const CronScheduleSection: React.FC<{
             }));
           }}
         >
-          <SelectTrigger size="lg" className="w-fit max-w-full"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-fit max-w-full"><SelectValue /></SelectTrigger>
           <SelectContent>
             {TIMEZONE_OPTIONS.map((timezone) => (
               <SelectItem key={timezone} value={timezone}>{timezone}</SelectItem>
@@ -1240,7 +1240,7 @@ export function ScheduledTaskEditorDialog(props: {
                         variant={location === 'local' ? 'default' : 'outline'}
                         onClick={() => setLocation('local')}
                       >
-                        <Icon name="computer" className="mr-1 h-4 w-4" />
+                        <Icon name="computer" className="me-1 h-4 w-4" />
                         {t('sessions.scheduledTasks.dialog.location.local')}
                       </Button>
                       <Button
@@ -1249,7 +1249,7 @@ export function ScheduledTaskEditorDialog(props: {
                         variant={location === 'shared' ? 'default' : 'outline'}
                         onClick={() => setLocation('shared')}
                       >
-                        <Icon name="cloud" className="mr-1 h-4 w-4" />
+                        <Icon name="cloud" className="me-1 h-4 w-4" />
                         {t('sessions.scheduledTasks.dialog.location.shared')}
                       </Button>
                     </div>
@@ -1289,7 +1289,7 @@ export function ScheduledTaskEditorDialog(props: {
                         }));
                       }}
                     >
-                      <SelectTrigger size="lg" className="w-fit max-w-full">
+                      <SelectTrigger className="w-fit max-w-full">
                         <SelectValue>
                           {(value) => value === 'daily'
                             ? t('sessions.scheduledTasks.editor.scheduleType.daily')
@@ -1332,7 +1332,7 @@ export function ScheduledTaskEditorDialog(props: {
                   </button>
 
                   {isDatePickerOpen ? (
-                    <div className="oc-surface-elevated absolute left-0 top-[calc(100%+6px)] z-50 w-[288px] rounded-xl border border-border bg-surface-elevated p-3 shadow-sm">
+                    <div className="oc-surface-elevated absolute start-0 top-[calc(100%+6px)] z-50 w-[288px] rounded-xl border border-border bg-surface-elevated p-3 shadow-sm">
                       <div className="mb-2 flex items-center justify-between">
                         <button
                           type="button"
@@ -1450,7 +1450,7 @@ export function ScheduledTaskEditorDialog(props: {
                       }));
                     }}
                   >
-                    <SelectTrigger size="lg" className="w-fit max-w-full"><SelectValue /></SelectTrigger>
+                    <SelectTrigger className="w-fit max-w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       {TIMEZONE_OPTIONS.map((timezone) => (
                         <SelectItem key={timezone} value={timezone}>{timezone}</SelectItem>
@@ -1522,7 +1522,7 @@ export function ScheduledTaskEditorDialog(props: {
                 </div>
                 <div>
                   <Button type="button" size="sm" variant="outline" onClick={addTime}>
-                    <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.editor.times.add')}
+                    <Icon name="add" className="me-1 h-4 w-4" /> {t('sessions.scheduledTasks.editor.times.add')}
                   </Button>
                 </div>
               </div>
@@ -1538,7 +1538,7 @@ export function ScheduledTaskEditorDialog(props: {
                     }));
                   }}
                 >
-                  <SelectTrigger size="lg" className="w-fit max-w-full"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-fit max-w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     {TIMEZONE_OPTIONS.map((timezone) => (
                       <SelectItem key={timezone} value={timezone}>{timezone}</SelectItem>
@@ -1585,7 +1585,7 @@ export function ScheduledTaskEditorDialog(props: {
                   }));
                 }}
               >
-                <SelectTrigger size="lg" className="w-fit max-w-full">
+                <SelectTrigger className="w-fit max-w-full">
                   <SelectValue>
                     {(value) => value === '__default'
                       ? t('sessions.scheduledTasks.editor.thinkingLevel.default')

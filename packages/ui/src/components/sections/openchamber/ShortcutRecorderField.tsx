@@ -18,6 +18,10 @@ interface ShortcutRecorderFieldProps {
   /** Accessible name for the focusable capture area. */
   ariaLabel?: string;
   className?: string;
+  /** Maximum number of chords in the sequence. OS-level global shortcuts only support one. */
+  maxChords?: number;
+  /** Most keys held at once, modifiers included. */
+  maxKeys?: number;
 }
 
 const toRecordingEvent = (event: React.KeyboardEvent<HTMLDivElement>): RecordingKeyboardEvent => ({
@@ -38,6 +42,8 @@ export const ShortcutRecorderField: React.FC<ShortcutRecorderFieldProps> = ({
   fieldRef,
   ariaLabel,
   className,
+  maxChords = 2,
+  maxKeys = 3,
 }) => {
   const { t } = useI18n();
 
@@ -47,13 +53,13 @@ export const ShortcutRecorderField: React.FC<ShortcutRecorderFieldProps> = ({
 
     const recordingEvent = toRecordingEvent(event);
     if (phase === 'keyup' && prefixStyle && value.chords.length === 0) {
-      const modifierCombo = modifierKeyUpToCombo(recordingEvent);
+      const modifierCombo = modifierKeyUpToCombo(recordingEvent, { maxKeys });
       if (modifierCombo) {
         onChange({ chords: [modifierCombo], livePreview: null, settled: true });
         return;
       }
     }
-    const nextState = updateShortcutRecordingState(value, recordingEvent, phase);
+    const nextState = updateShortcutRecordingState(value, recordingEvent, phase, maxChords, { maxKeys });
     onChange(prefixStyle && nextState.chords.length > 1 ? value : nextState);
   };
 

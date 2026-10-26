@@ -5,7 +5,6 @@ import type { IconName } from '@/components/icon/icons';
 import {
   SettingsSection,
   SettingsCheckboxRow,
-  SETTINGS_SELECT_SIZE,
 } from '@/components/sections/shared/SettingsSection';
 import { SettingsInfoHint } from '@/components/sections/shared/SettingsInfoHint';
 import { Switch } from '@/components/ui/switch';
@@ -37,19 +36,15 @@ interface ToolRowProps {
 }
 
 /** Icon column width plus gap, so a nested row lines up with the tool text. */
-const TOOL_ROW_TEXT_INSET_CLASS = 'pl-[3.75rem]';
+const TOOL_ROW_TEXT_INSET_CLASS = 'ps-[3.75rem]';
 
 const ToolRow: React.FC<ToolRowProps> = ({ icon, title, summary, info, ariaLabel, checked, onChange, settingsItem }) => (
   <div data-settings-item={settingsItem} className="flex items-center gap-3 px-4 py-3">
-    <span
-      className={cn(
-        'flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-muted)] text-foreground transition-opacity',
-        !checked && 'opacity-50',
-      )}
-    >
+    {/* The switch alone says "off": dimming the row would read as disabled. */}
+    <span className="flex size-8 shrink-0 items-center justify-center oc-tile-inset rounded-lg text-foreground">
       <Icon name={icon} className="size-4" />
     </span>
-    <div className={cn('min-w-0 flex-1 transition-opacity', !checked && 'opacity-60')}>
+    <div className="min-w-0 flex-1">
       <div className="flex min-w-0 items-center gap-1.5">
         <span className="truncate typography-ui-label font-medium text-foreground">{title}</span>
         <SettingsInfoHint>{info}</SettingsInfoHint>
@@ -81,6 +76,8 @@ export const OpenChamberToolsSettings: React.FC = () => {
   const { t } = useI18n();
   const agentControlToolEnabled = useUIStore((state) => state.agentControlToolEnabled);
   const setAgentControlToolEnabled = useUIStore((state) => state.setAgentControlToolEnabled);
+  const agentScheduleToolEnabled = useUIStore((state) => state.agentScheduleToolEnabled);
+  const setAgentScheduleToolEnabled = useUIStore((state) => state.setAgentScheduleToolEnabled);
   const agentWebToolEnabled = useUIStore((state) => state.agentWebToolEnabled);
   const setAgentWebToolEnabled = useUIStore((state) => state.setAgentWebToolEnabled);
   const browserProvider = useUIStore((state) => state.browserProvider);
@@ -91,8 +88,16 @@ export const OpenChamberToolsSettings: React.FC = () => {
   // visible switch invites turning on something that was never announced.
   const agentMemoryAvailable = useUIStore((state) => state.agentMemoryFeatureAvailable);
   const setAgentMemoryToolEnabled = useUIStore((state) => state.setAgentMemoryToolEnabled);
+  const agentKnowledgeToolEnabled = useUIStore((state) => state.agentKnowledgeToolEnabled);
+  const setAgentKnowledgeToolEnabled = useUIStore((state) => state.setAgentKnowledgeToolEnabled);
   const agentNotifyToolEnabled = useUIStore((state) => state.agentNotifyToolEnabled);
   const setAgentNotifyToolEnabled = useUIStore((state) => state.setAgentNotifyToolEnabled);
+  const agentRenderToolEnabled = useUIStore((state) => state.agentRenderToolEnabled);
+  const setAgentRenderToolEnabled = useUIStore((state) => state.setAgentRenderToolEnabled);
+  // Absent in builds without workflows, the way memory is.
+  const agentWorkflowAvailable = useUIStore((state) => state.agentWorkflowFeatureAvailable);
+  const agentWorkflowToolEnabled = useUIStore((state) => state.agentWorkflowToolEnabled);
+  const setAgentWorkflowToolEnabled = useUIStore((state) => state.setAgentWorkflowToolEnabled);
   const agentToolsCodeMode = useUIStore((state) => state.agentToolsCodeMode);
   const setAgentToolsCodeMode = useUIStore((state) => state.setAgentToolsCodeMode);
 
@@ -100,6 +105,11 @@ export const OpenChamberToolsSettings: React.FC = () => {
     setAgentControlToolEnabled(enabled);
     void updateDesktopSettings({ agentControlToolEnabled: enabled });
   }, [setAgentControlToolEnabled]);
+
+  const handleAgentScheduleToolChange = React.useCallback((enabled: boolean) => {
+    setAgentScheduleToolEnabled(enabled);
+    void updateDesktopSettings({ agentScheduleToolEnabled: enabled });
+  }, [setAgentScheduleToolEnabled]);
 
   const handleAgentWebToolChange = React.useCallback((enabled: boolean) => {
     setAgentWebToolEnabled(enabled);
@@ -110,6 +120,21 @@ export const OpenChamberToolsSettings: React.FC = () => {
     setAgentNotifyToolEnabled(enabled);
     void updateDesktopSettings({ agentNotifyToolEnabled: enabled });
   }, [setAgentNotifyToolEnabled]);
+
+  const handleAgentRenderToolChange = React.useCallback((enabled: boolean) => {
+    setAgentRenderToolEnabled(enabled);
+    void updateDesktopSettings({ agentRenderToolEnabled: enabled });
+  }, [setAgentRenderToolEnabled]);
+
+  const handleAgentKnowledgeToolChange = React.useCallback((enabled: boolean) => {
+    setAgentKnowledgeToolEnabled(enabled);
+    void updateDesktopSettings({ agentKnowledgeToolEnabled: enabled });
+  }, [setAgentKnowledgeToolEnabled]);
+
+  const handleAgentWorkflowToolChange = React.useCallback((enabled: boolean) => {
+    setAgentWorkflowToolEnabled(enabled);
+    void updateDesktopSettings({ agentWorkflowToolEnabled: enabled });
+  }, [setAgentWorkflowToolEnabled]);
 
   const handleAgentToolsCodeModeChange = React.useCallback((enabled: boolean) => {
     setAgentToolsCodeMode(enabled);
@@ -153,7 +178,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
 
   return (
     <SettingsSection title={t('settings.openchamber.tools.title')}>
-      <div className="max-w-[44rem] divide-y divide-[var(--interactive-border)] rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-elevated)]">
+      <div className="max-w-[44rem] oc-tile divide-y divide-[var(--interactive-border)] rounded-xl">
         <ToolRow
           icon="node-tree"
           settingsItem="sessions.agent-control-tool"
@@ -163,6 +188,17 @@ export const OpenChamberToolsSettings: React.FC = () => {
           summary={t('settings.openchamber.tools.field.agentControlToolSummary')}
           info={t('settings.openchamber.tools.field.agentControlToolInfo')}
           ariaLabel={t('settings.openchamber.tools.field.agentControlToolAria')}
+        />
+
+        <ToolRow
+          icon="calendar-schedule"
+          settingsItem="sessions.agent-schedule-tool"
+          checked={agentScheduleToolEnabled}
+          onChange={handleAgentScheduleToolChange}
+          title={t('settings.openchamber.tools.field.agentScheduleTool')}
+          summary={t('settings.openchamber.tools.field.agentScheduleToolSummary')}
+          info={t('settings.openchamber.tools.field.agentScheduleToolInfo')}
+          ariaLabel={t('settings.openchamber.tools.field.agentScheduleToolAria')}
         />
 
         {/* One group, so no divider separates the web tool from its own setting. */}
@@ -182,7 +218,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
               learn that browser-provider extensions exist. */}
           <div
             data-settings-item="sessions.browser-provider"
-            className={cn('flex min-w-0 items-center gap-2 pb-3 pr-4', TOOL_ROW_TEXT_INSET_CLASS)}
+            className={cn('flex min-w-0 items-center gap-2 pb-3 pe-4', TOOL_ROW_TEXT_INSET_CLASS)}
           >
             <span className="truncate typography-meta text-muted-foreground">
               {t('settings.openchamber.tools.browserProvider.label')}
@@ -194,8 +230,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
               disabled={!agentWebToolEnabled || providerGuests.length === 0}
             >
               <SelectTrigger
-                size={SETTINGS_SELECT_SIZE}
-                className="ml-auto w-auto min-w-0 max-w-[14rem]"
+                className="ms-auto w-auto min-w-0 max-w-[14rem]"
                 aria-label={t('settings.openchamber.tools.browserProvider.aria')}
               >
                 <SelectValue>
@@ -229,6 +264,28 @@ export const OpenChamberToolsSettings: React.FC = () => {
           ariaLabel={t('settings.openchamber.tools.field.agentNotifyToolAria')}
         />
 
+        <ToolRow
+          icon="bar-chart-box"
+          settingsItem="sessions.agent-render-tool"
+          checked={agentRenderToolEnabled}
+          onChange={handleAgentRenderToolChange}
+          title={t('settings.openchamber.tools.field.agentRenderTool')}
+          summary={t('settings.openchamber.tools.field.agentRenderToolSummary')}
+          info={t('settings.openchamber.tools.field.agentRenderToolInfo')}
+          ariaLabel={t('settings.openchamber.tools.field.agentRenderToolAria')}
+        />
+
+        <ToolRow
+          icon="sticky-note"
+          settingsItem="sessions.agent-knowledge-tool"
+          checked={agentKnowledgeToolEnabled}
+          onChange={handleAgentKnowledgeToolChange}
+          title={t('settings.openchamber.tools.field.agentKnowledgeTool')}
+          summary={t('settings.openchamber.tools.field.agentKnowledgeToolSummary')}
+          info={t('settings.openchamber.tools.field.agentKnowledgeToolInfo')}
+          ariaLabel={t('settings.openchamber.tools.field.agentKnowledgeToolAria')}
+        />
+
         {agentMemoryAvailable ? (
           <ToolRow
             icon="brain"
@@ -239,6 +296,19 @@ export const OpenChamberToolsSettings: React.FC = () => {
             summary={t('settings.openchamber.tools.field.agentMemoryToolSummary')}
             info={t('settings.openchamber.tools.field.agentMemoryToolInfo')}
             ariaLabel={t('settings.openchamber.tools.field.agentMemoryToolAria')}
+          />
+        ) : null}
+
+        {agentWorkflowAvailable ? (
+          <ToolRow
+            icon="flow-chart"
+            settingsItem="sessions.agent-workflow-tool"
+            checked={agentWorkflowToolEnabled}
+            onChange={handleAgentWorkflowToolChange}
+            title={t('settings.openchamber.tools.field.agentWorkflowTool')}
+            summary={t('settings.openchamber.tools.field.agentWorkflowToolSummary')}
+            info={t('settings.openchamber.tools.field.agentWorkflowToolInfo')}
+            ariaLabel={t('settings.openchamber.tools.field.agentWorkflowToolAria')}
           />
         ) : null}
       </div>

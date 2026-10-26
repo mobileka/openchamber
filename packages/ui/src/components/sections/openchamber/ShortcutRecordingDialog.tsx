@@ -36,6 +36,14 @@ interface ShortcutRecordingDialogProps {
     replaceActionId?: ShortcutActionId,
   ) => void;
   onOpenChange: (open: boolean) => void;
+  /** Maximum number of chords in the sequence. OS-level global shortcuts only support one. @default 2 */
+  maxChords?: number;
+  /**
+   * Most keys held at once, modifiers included. In-app shortcuts stay at three;
+   * a global shortcut needs room for all four modifiers plus a key (a "hyper"
+   * key sends Ctrl+Shift+Cmd+Option). @default 3
+   */
+  maxKeys?: number;
 }
 
 function isCustomizableConflict(
@@ -49,6 +57,8 @@ export const ShortcutRecordingDialog: React.FC<ShortcutRecordingDialogProps> = (
   overrides,
   onSave,
   onOpenChange,
+  maxChords = 2,
+  maxKeys = 3,
 }) => {
   const { t } = useI18n();
   const actionLabel = (shortcut: CustomizableShortcutAction) => t(shortcut.settingsLabelKey);
@@ -112,7 +122,7 @@ export const ShortcutRecordingDialog: React.FC<ShortcutRecordingDialogProps> = (
           <DialogTitle>
             {action ? t('settings.openchamber.keyboardShortcuts.dialog.title', { action: actionLabel(action) }) : ''}
           </DialogTitle>
-          <DialogDescription>{t('settings.openchamber.keyboardShortcuts.dialog.instructions')}</DialogDescription>
+          <DialogDescription>{t(maxChords === 1 ? 'settings.openchamber.keyboardShortcuts.dialog.instructionsSingle' : 'settings.openchamber.keyboardShortcuts.dialog.instructions')}</DialogDescription>
         </DialogHeader>
 
         <ShortcutRecorderField
@@ -120,6 +130,8 @@ export const ShortcutRecordingDialog: React.FC<ShortcutRecordingDialogProps> = (
           onChange={setRecording}
           prefixStyle={Boolean(action && 'prefixStyle' in action && action.prefixStyle)}
           fieldRef={recordingRef}
+          maxChords={maxChords}
+          maxKeys={maxKeys}
         />
 
         {recording.settled && protectedConflict ? (

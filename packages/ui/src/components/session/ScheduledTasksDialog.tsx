@@ -563,7 +563,7 @@ export function ScheduledTasksDialog() {
               className="w-full"
               onClick={openNewTaskEditor}
             >
-              <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
+              <Icon name="add" className="me-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
             </Button>
           )}
         >
@@ -579,7 +579,7 @@ export function ScheduledTasksDialog() {
                 a draft, or another surface in the sidebar. */}
             <div className="flex items-center px-6 pt-3">
               <Button size="sm" onClick={openNewTaskEditor}>
-                <Icon name="add" className="mr-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
+                <Icon name="add" className="me-1 h-4 w-4" /> {t('sessions.scheduledTasks.dialog.actions.newTask')}
               </Button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">

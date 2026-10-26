@@ -1,14 +1,14 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { hasGuestPage, requestedGuestCapabilities, resolveAttachEntry, resolveAttachMode, resolvePageEntry, resolveStatusSectionEntry, toPublicService, toPublicIntegration, hostMeetsOpenChamberEngine, openChamberEngineMinimum } from '@openchamber/sdk';
+import { hasGuestPage, requestedGuestCapabilities, resolveAttachEntry, resolveAttachMode, resolvePageEntry, resolveStatusSectionEntry, resolveStatusSectionSource, toPublicService, toPublicSourceControl, toPublicIntegration, hostMeetsOpenChamberEngine, openChamberEngineMinimum } from '@openchamber/sdk';
 import { parseManifestJson } from '@openchamber/sdk/schemas';
 
 import { listRelativeGuestScriptHrefs, resolveGuestHtmlRelativePath } from './html-tokens.js';
 import { effectiveGrants, guestGrantScope } from './grant-scope.js';
 import { enterpriseBlockedCapabilities } from './enterprise.js';
 import { readEnterprisePolicy } from '../enterprise-mode.js';
-import { onExtensionStoreWrite, readExtensionStore } from './persist.js';
+import { ensureGuestStorageIds, onExtensionStoreWrite, readExtensionStore } from './persist.js';
 import { buildPublicSocketBindings } from './sockets.js';
 import { isReservedBuiltInId, readBuiltInRegistry } from './builtins.js';
 
@@ -250,7 +250,8 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
     if (page !== true && page?.title) guest.pageTitle = page.title;
   }
   // The Work Status section is checked like any other entry, and may be the
-  // package's only frame.
+  // package's only frame. A source section has no frame: the host reads it
+  // from the service.
   const statusEntry = resolveStatusSectionEntry(parsed.manifest.contributes);
   if (statusEntry) {
     if (!await resolveGuestAssetPath(packageRoot, statusEntry)) {
@@ -260,9 +261,15 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
       return { ok: false, code: 'missing-build' };
     }
     guest.statusEntry = statusEntry;
+  }
+  const statusSource = resolveStatusSectionSource(parsed.manifest.contributes);
+  if (statusSource) guest.statusSource = statusSource;
+  if (statusEntry || statusSource) {
     const section = parsed.manifest.contributes.statusSection;
     if (section !== true && section?.title) guest.statusTitle = section.title;
     if (section !== true && section?.height !== undefined) guest.statusHeight = section.height;
+    if (section !== true && section?.defaultExpanded !== undefined) guest.statusDefaultExpanded = section.defaultExpanded;
+    if (section !== true && section?.requiresProject !== undefined) guest.statusRequiresProject = section.requiresProject;
   }
   // File editors are frames of their own too; each entry is checked the same way.
   const fileEditors = parsed.manifest.contributes.fileEditors ?? [];
@@ -304,6 +311,10 @@ export const inspectGuestPackage = async (packageRoot, { openchamberVersion, ski
       return { ok: false, code: 'missing-build' };
     }
     guest.service = parsed.manifest.contributes.service;
+  }
+  // The Git host a `source-control` service provides; the parse requires it exactly then.
+  if (parsed.manifest.contributes.sourceControl) {
+    guest.sourceControl = parsed.manifest.contributes.sourceControl;
   }
   return { ok: true, guest };
 };
@@ -366,8 +377,11 @@ export const toPublicGuest = (guest) => {
   if (guest.pageEntry) row.pageEntry = guest.pageEntry;
   if (guest.pageTitle) row.pageTitle = guest.pageTitle;
   if (guest.statusEntry) row.statusEntry = guest.statusEntry;
+  if (guest.statusSource) row.statusSource = { path: guest.statusSource.path, interval: guest.statusSource.interval };
   if (guest.statusTitle) row.statusTitle = guest.statusTitle;
   if (Number.isInteger(guest.statusHeight)) row.statusHeight = guest.statusHeight;
+  if (guest.statusDefaultExpanded !== undefined) row.statusDefaultExpanded = guest.statusDefaultExpanded;
+  if (guest.statusRequiresProject !== undefined) row.statusRequiresProject = guest.statusRequiresProject;
   if (attach) {
     row.attach = attach;
   }
@@ -403,6 +417,9 @@ export const toPublicGuest = (guest) => {
     requested: requestedGuestCapabilities(guest),
     granted,
   };
+  if (guest.storageId && requestedGuestCapabilities(guest).every((capability) => granted.includes(capability))) {
+    row.storageId = guest.storageId;
+  }
   const service = toPublicService(
     guest.service,
     granted.includes('service'),
@@ -410,6 +427,10 @@ export const toPublicGuest = (guest) => {
   );
   if (service) {
     row.service = service;
+  }
+  // What the approval dialog names: the Git host's label and the instances it reaches.
+  if (guest.sourceControl) {
+    row.sourceControl = toPublicSourceControl(guest.sourceControl);
   }
   return row;
 };
@@ -508,6 +529,7 @@ const listInstalledGuestsUncached = async ({ persistPath } = {}) => {
         capabilityGrants: requestedGuestCapabilities(guest),
         enabled: !stored.disabledGuests?.[guest.id],
         socketBindings,
+        storageDescriptor: { id: guest.id, storedPath: null, builtIn: true },
       });
     }
   }
@@ -546,9 +568,22 @@ const listInstalledGuestsUncached = async ({ persistPath } = {}) => {
       ),
       enabled: !stored.disabledGuests?.[guest.id],
       socketBindings,
+      storageDescriptor: { id: guest.id, storedPath, builtIn: false },
     });
   }
 
+  const descriptors = guests.map((guest) => guest.storageDescriptor);
+  if (descriptors.some(({ id }) => !stored.storageIds?.[id])) {
+    try {
+      const identities = await ensureGuestStorageIds(persistPath, descriptors);
+      for (const guest of guests) guest.storageId = identities[guest.id];
+    } catch {
+      console.warn('Guest storage identities are temporarily unavailable.');
+    }
+  } else {
+    for (const guest of guests) guest.storageId = stored.storageIds?.[guest.id];
+  }
+  for (const guest of guests) delete guest.storageDescriptor;
   return guests;
 };
 

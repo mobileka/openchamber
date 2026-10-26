@@ -8,8 +8,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const RESTART_NOTIFY_MARKER_FILE = 'restart-notify.json';
-export const RESTART_NOTIFY_MARKER_MAX_AGE_MS = 5 * 60 * 1000;
+const RESTART_NOTIFY_MARKER_FILE = 'restart-notify.json';
+const RESTART_NOTIFY_MARKER_MAX_AGE_MS = 5 * 60 * 1000;
 
 export const restartNotifyMarkerPath = (dataDir) => path.join(dataDir, RESTART_NOTIFY_MARKER_FILE);
 

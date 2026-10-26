@@ -46,7 +46,7 @@ export const CommandcodeModelsUpdateDialog: React.FC<CommandcodeModelsUpdateDial
             </span>
           </DialogTitle>
           {notice.commit ? (
-            <span className="ml-3 font-mono text-sm text-muted-foreground">
+            <span className="ms-3 font-mono text-sm text-muted-foreground">
               {notice.commit}
             </span>
           ) : null}

@@ -12,19 +12,13 @@ import { getMemoryLimits, type SessionHistoryMeta } from '@/stores/types/session
 import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 
 type ViewportAnchor = { messageId: string; offsetTop: number };
-type TimelineIdentityToken = { key: string | null };
+type TimelineIdentityToken = { key: string | null; connected: boolean };
 
 type PendingScrollRequest = {
     identity: TimelineIdentityToken;
     kind: 'turn' | 'message';
     id: string;
     behavior: ScrollBehavior;
-    /**
-     * `keep` leaves a mounted target untouched: the caller (find navigation)
-     * positions the match itself and must not have a row-top scroll drag it
-     * away. An unmounted target is still teleported into the rendered window.
-     */
-    align: 'top' | 'keep';
     turnId: string | null;
     resolve: (value: boolean) => void;
 };
@@ -54,11 +48,12 @@ export interface UseChatTimelineControllerResult {
     showScrollToBottom: boolean;
     turnWindowModel: TurnWindowModel;
     loadEarlier: (options?: { userInitiated?: boolean }) => Promise<void>;
+    loadHistoryUntilMessage: (messageId: string, options: { maxBatches: number }) => Promise<boolean>;
     revealBufferedTurns: () => Promise<boolean>;
     resumeToBottom: () => void;
     resumeToBottomInstant: () => Promise<void>;
     scrollToTurn: (turnId: string, options?: { behavior?: ScrollBehavior }) => Promise<boolean>;
-    scrollToMessage: (messageId: string, options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' }) => Promise<boolean>;
+    scrollToMessage: (messageId: string, options?: { behavior?: ScrollBehavior }) => Promise<boolean>;
     handleHistoryScroll: () => void;
     captureViewportAnchor: () => ViewportAnchor | null;
     restoreViewportAnchor: (anchor: ViewportAnchor) => boolean;
@@ -77,6 +72,8 @@ const resolveHistoryScrollThreshold = (clientHeight: number): number => Math.max
     clientHeight * HISTORY_SCROLL_VIEWPORT_FACTOR,
 )
 const HISTORY_RENDER_WAIT_TIMEOUT_MS = 250
+// Render commits (or 250ms timeouts) to wait for a concurrent history load.
+const HISTORY_LOAD_WAIT_LIMIT = 40
 const HISTORY_INTERACTION_GUARD_MS = 2000
 // Long smooth scrolls across a big session can take a couple of seconds;
 // the pin releases early as soon as the spy reports the target turn.
@@ -117,13 +114,16 @@ const setScrollTopDefeatingMomentum = (container: HTMLElement, target: number) =
     container.style.overflow = previousOverflow;
     container.scrollTop = target;
 
-    if (typeof window === 'undefined') return;
+    if (typeof window === 'undefined') return () => {};
     let cancelled = false;
+    let frame: number;
     let frames = 0;
-    const cancelOnUserTouch = () => {
+    const cancel = () => {
         cancelled = true;
+        window.cancelAnimationFrame(frame);
+        container.removeEventListener('touchstart', cancel);
     };
-    container.addEventListener('touchstart', cancelOnUserTouch, { passive: true, once: true });
+    container.addEventListener('touchstart', cancel, { passive: true, once: true });
     const watch = () => {
         if (cancelled) return;
         // Only correct upward drift (residual momentum). Downward movement or
@@ -133,12 +133,13 @@ const setScrollTopDefeatingMomentum = (container: HTMLElement, target: number) =
         }
         frames += 1;
         if (frames < MOMENTUM_WATCHDOG_FRAMES) {
-            window.requestAnimationFrame(watch);
+            frame = window.requestAnimationFrame(watch);
         } else {
-            container.removeEventListener('touchstart', cancelOnUserTouch);
+            cancel();
         }
     };
-    window.requestAnimationFrame(watch);
+    frame = window.requestAnimationFrame(watch);
+    return cancel;
 };
 
 const hasInsertedBeforeKnownOldest = (
@@ -205,9 +206,9 @@ export const useChatTimelineController = ({
     const isLoadingOlderRef = React.useRef(isLoadingOlder);
     const pendingRevealWorkRef = React.useRef(pendingRevealWork);
     const sessionIdRef = React.useRef<string | null>(sessionId);
-    const timelineIdentityRef = React.useRef<TimelineIdentityToken>({ key: sessionKey });
+    const timelineIdentityRef = React.useRef<TimelineIdentityToken>({ key: sessionKey, connected: true });
     if (timelineIdentityRef.current.key !== sessionKey) {
-        timelineIdentityRef.current = { key: sessionKey };
+        timelineIdentityRef.current = { key: sessionKey, connected: true };
     }
     const messagesRef = React.useRef(messages);
     const initializedSessionKeyRef = React.useRef<string | null>(null);
@@ -217,6 +218,7 @@ export const useChatTimelineController = ({
     const historyInteractionRef = React.useRef(false);
     const historyInteractionTimerRef = React.useRef<number | null>(null);
     const lastHistoryScrollTopRef = React.useRef<number | null>(null);
+    const cancelMomentumWatchRef = React.useRef<(() => void) | null>(null);
 
     const historySignals = React.useMemo(() => {
         const defaultLimit = getMemoryLimits().HISTORICAL_MESSAGES;
@@ -353,7 +355,7 @@ export const useChatTimelineController = ({
 
         const didScroll = pending.kind === 'turn'
             ? (messageListRef.current?.scrollToTurnId(pending.id, { behavior: pending.behavior }) ?? false)
-            : (messageListRef.current?.scrollToMessageId(pending.id, { behavior: pending.behavior, align: pending.align }) ?? false);
+            : (messageListRef.current?.scrollToMessageId(pending.id, { behavior: pending.behavior }) ?? false);
 
         if (didScroll) {
             if (pending.turnId) {
@@ -374,16 +376,26 @@ export const useChatTimelineController = ({
             ? turnModelRef.current.turnIndexById.get(pending.id)
             : turnModelRef.current.messageToTurnIndex.get(pending.id);
 
-        // The message list owns message scrolling: when it cannot act on the
-        // request, the request is terminal, whether or not the turn model
-        // knows the id. Find navigation runs its own mount retries.
-        if (targetIndex !== undefined || pending.kind === 'message') {
+        if (typeof targetIndex === 'number') {
             resolvePendingScrollRequest(false);
         }
     }, [messageListRef, resolvePendingScrollRequest]);
 
-    React.useEffect(() => {
+    React.useLayoutEffect(() => {
+        if (!timelineIdentityRef.current.connected) {
+            timelineIdentityRef.current = { key: sessionKey, connected: true };
+        }
+        isLoadingOlderRef.current = false;
+        setIsLoadingOlder(false);
+        setPendingRevealWork(false);
         return () => {
+            timelineIdentityRef.current = { key: sessionKey, connected: false };
+            cancelMomentumWatchRef.current?.();
+            cancelMomentumWatchRef.current = null;
+            historyInteractionRef.current = false;
+            lastHistoryScrollTopRef.current = null;
+            scrollPinRef.current = null;
+            prePrependScrollRef.current = null;
             if (historyInteractionTimerRef.current !== null && typeof window !== 'undefined') {
                 window.clearTimeout(historyInteractionTimerRef.current);
                 historyInteractionTimerRef.current = null;
@@ -391,7 +403,7 @@ export const useChatTimelineController = ({
             resolvePendingRenderWaiters();
             resolvePendingScrollRequest(false);
         };
-    }, [resolvePendingRenderWaiters, resolvePendingScrollRequest]);
+    }, [resolvePendingRenderWaiters, resolvePendingScrollRequest, sessionKey]);
 
     const renderedMessages = messages;
 
@@ -556,7 +568,8 @@ export const useChatTimelineController = ({
 
             // Non-virtualized mobile list only: fight iOS momentum manually.
             if (isMobileSurfaceRuntime() && heightDelta > 0) {
-                setScrollTopDefeatingMomentum(container, snap.top + heightDelta);
+                cancelMomentumWatchRef.current?.();
+                cancelMomentumWatchRef.current = setScrollTopDefeatingMomentum(container, snap.top + heightDelta);
                 updateTracking();
                 return;
             }
@@ -574,7 +587,8 @@ export const useChatTimelineController = ({
             if (delta > 0) {
                 const target = container.scrollTop + delta;
                 if (isMobileSurfaceRuntime()) {
-                    setScrollTopDefeatingMomentum(container, target);
+                    cancelMomentumWatchRef.current?.();
+                    cancelMomentumWatchRef.current = setScrollTopDefeatingMomentum(container, target);
                 } else {
                     container.scrollTop = target;
                 }
@@ -594,7 +608,7 @@ export const useChatTimelineController = ({
     const fetchOlderHistory = React.useCallback(async (input: {
         preserveViewport: boolean;
     }): Promise<boolean> => {
-        if (!sessionIdRef.current || !timelineIdentityRef.current.key || isLoadingOlderRef.current) {
+        if (!sessionIdRef.current || !timelineIdentityRef.current.key || !timelineIdentityRef.current.connected || isLoadingOlderRef.current) {
             return false;
         }
         if (!historySignalsRef.current.hasMoreAboveTurns) {
@@ -663,6 +677,7 @@ export const useChatTimelineController = ({
 
     const loadEarlier = React.useCallback(async (options?: { userInitiated?: boolean }) => {
         const targetIdentity = timelineIdentityRef.current;
+        if (!targetIdentity.connected) return;
         beginHistoryInteraction();
         if (options?.userInitiated) {
             releaseAutoFollow();
@@ -676,6 +691,36 @@ export const useChatTimelineController = ({
             }
         }
     }, [beginHistoryInteraction, fetchOlderHistory, releaseAutoFollow, settleHistoryInteraction]);
+
+    // Loads older history batch by batch until the message is in the
+    // timeline, for targets that lie before the loaded window. Bounded by
+    // `maxBatches` because a message that was reverted or deleted never
+    // arrives. Resolves false on failure, exhaustion, or a session switch.
+    const loadHistoryUntilMessage = React.useCallback(async (
+        messageId: string,
+        options: { maxBatches: number },
+    ): Promise<boolean> => {
+        const targetIdentity = timelineIdentityRef.current;
+        const isLoaded = () => messagesRef.current.some((message) => message.info.id === messageId);
+        let batches = 0;
+        // Another history load (the underfilled-viewport fill) can hold the
+        // single loading slot; wait it out rather than give up.
+        let waits = 0;
+        while (targetIdentity.connected && timelineIdentityRef.current === targetIdentity) {
+            if (isLoaded()) return true;
+            if (batches >= options.maxBatches || !historySignalsRef.current.hasMoreAboveTurns) return false;
+            if (isLoadingOlderRef.current) {
+                waits += 1;
+                if (waits > HISTORY_LOAD_WAIT_LIMIT) return false;
+                await waitForNextRenderCommitOrTimeout();
+                continue;
+            }
+            batches += 1;
+            const grew = await fetchOlderHistory({ preserveViewport: true }).catch(() => false);
+            if (!grew) return timelineIdentityRef.current === targetIdentity && isLoaded();
+        }
+        return false;
+    }, [fetchOlderHistory, waitForNextRenderCommitOrTimeout]);
 
     const handleHistoryScroll = React.useCallback(() => {
         // Mobile never loads history from scroll position: any prepend racing
@@ -721,7 +766,7 @@ export const useChatTimelineController = ({
         turnId: string,
         options?: { behavior?: ScrollBehavior },
     ): Promise<boolean> => {
-        if (!turnId || !sessionIdRef.current || !timelineIdentityRef.current.key) {
+        if (!turnId || !sessionIdRef.current || !timelineIdentityRef.current.key || !timelineIdentityRef.current.connected) {
             return false;
         }
 
@@ -745,7 +790,6 @@ export const useChatTimelineController = ({
                     kind: 'turn',
                     id: turnId,
                     behavior: options?.behavior ?? 'auto',
-                    align: 'top',
                     turnId,
                     resolve,
                 };
@@ -766,9 +810,9 @@ export const useChatTimelineController = ({
 
     const scrollToMessage = React.useCallback(async (
         messageId: string,
-        options?: { behavior?: ScrollBehavior; align?: 'top' | 'keep' },
+        options?: { behavior?: ScrollBehavior },
     ): Promise<boolean> => {
-        if (!messageId || !sessionIdRef.current || !timelineIdentityRef.current.key) {
+        if (!messageId || !sessionIdRef.current || !timelineIdentityRef.current.key || !timelineIdentityRef.current.connected) {
             return false;
         }
 
@@ -782,12 +826,11 @@ export const useChatTimelineController = ({
             }
 
             const turnId = turnModelRef.current.messageToTurnId.get(messageId);
+            const turnIndex = turnModelRef.current.messageToTurnIndex.get(messageId);
 
-            // The turn window model only maps messages it can attribute to a
-            // turn; v2 assistant replies carry no parent, so they are absent
-            // from it. The message list owns the display index for every
-            // rendered message and can scroll it anyway, and the turn id only
-            // pins the rail indicator, so it must not gate the scroll.
+            if (typeof turnIndex !== 'number') {
+                return false;
+            }
 
             const result = await new Promise<boolean>((resolve) => {
                 pendingScrollRequestRef.current = {
@@ -795,7 +838,6 @@ export const useChatTimelineController = ({
                     kind: 'message',
                     id: messageId,
                     behavior: options?.behavior ?? 'auto',
-                    align: options?.align ?? 'top',
                     turnId: turnId ?? null,
                     resolve,
                 };
@@ -848,6 +890,7 @@ export const useChatTimelineController = ({
         showScrollToBottom: showScrollButton && !pendingRevealWork,
         turnWindowModel,
         loadEarlier,
+        loadHistoryUntilMessage,
         revealBufferedTurns,
         resumeToBottom,
         resumeToBottomInstant,

@@ -1,6 +1,20 @@
 import type { BridgeContext, BridgeResponse } from './bridge';
 import { waitForApiUrl } from './opencode-ready';
-import { ENTERPRISE_MODE_ERROR, isEnterpriseMode, isProviderConnectRequest } from '../../web/server/lib/enterprise-mode.js';
+import {
+  CREDENTIAL_LIST_ERROR,
+  ENTERPRISE_MODE_ERROR,
+  isCredentialListRequest,
+  isEnterpriseMode,
+  isProviderConnectRequest,
+} from '../../web/server/lib/enterprise-mode.js';
+import { vcsInitRefusal, vcsInitRefusalBody } from '../../web/server/lib/git/repository-root.js';
+import { z } from 'zod';
+import {
+  OPENCODE_TRUST_ROUTE,
+  type OpenCodeTrust,
+  type OpenCodeTrustAnswer,
+  type OpenCodeTrustRouteRequest,
+} from '../../web/server/lib/opencode-trust/index.js';
 import { isSessionRecordPath, overlaySessionResponseBody, parseJson, type SessionStateStore } from './openchamberSessionState';
 
 type BridgeMessageInput = {
@@ -59,8 +73,12 @@ const isSseProxyPath = (requestPath: string): boolean => {
 
 type ProxyRuntimeDeps = {
   tryHandleLocalFsProxy: (method: string, requestPath: string) => Promise<ApiProxyResponsePayload | null>;
+  /** Resolves once no worktree holding the directory is being removed (gitService). */
+  waitForWorktreeRemoval: (directory: string) => Promise<void>;
   /** Archive flags and stored metadata to fold onto session reads; optional for callers without owned state. */
-  sessionState?: Pick<SessionStateStore, 'readArchived' | 'readMetadata'>;
+  sessionState?: Pick<SessionStateStore, 'readArchived' | 'readMetadata' | 'readUnreadBaseline'>;
+  /** The folder trust check shared with the web server; absent opens every folder. */
+  openCodeTrust?: OpenCodeTrust;
   buildUnavailableApiResponse: () => ApiProxyResponsePayload;
   sanitizeForwardHeaders: (input: Record<string, string> | undefined) => Record<string, string>;
   collectHeaders: (headers: Headers) => Record<string, string>;
@@ -105,6 +123,9 @@ const buildReadCoalesceKey = (targetUrl: string, headers: Record<string, string>
   return `GET ${targetUrl}\n${canonicalHeaders}`;
 };
 
+const normalizeHeaderKeys = (headers: Record<string, string> | undefined): Record<string, string> =>
+  Object.fromEntries(Object.entries(headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]));
+
 const performApiProxyFetch = async (
   targetUrl: string,
   method: string,
@@ -138,7 +159,7 @@ const performApiProxyFetch = async (
 
 /**
  * `GET /api/session` and `GET /api/session/:id` come back with OpenChamber's
- * own archive flag and metadata folded in, the same as the web proxy does, so
+ * own archive flag, metadata and unread baseline folded in, the same as the web proxy does, so
  * the shared UI keeps reading `time.archived` and `metadata` where it always
  * did. A file that cannot be read leaves the upstream record untouched.
  */
@@ -158,9 +179,113 @@ const overlayOwnedSessionState = async (
   if (!isSessionRecordPath(pathname)) return data;
   const body = parseJson(data.bodyText);
   if (body === null) return data;
-  const [archived, stored] = await Promise.all([sessionState.readArchived(), sessionState.readMetadata()]);
-  if (!archived && !stored) return data;
-  return { ...data, bodyText: JSON.stringify(overlaySessionResponseBody(body, archived, stored)) };
+  const [archived, stored, unreadSince] = await Promise.all([
+    sessionState.readArchived(),
+    sessionState.readMetadata(),
+    sessionState.readUnreadBaseline(),
+  ]);
+  if (!archived && !stored && unreadSince === null) return data;
+  return { ...data, bodyText: JSON.stringify(overlaySessionResponseBody(body, archived, stored, unreadSince)) };
+};
+
+const RESOLVE_PROBE_BASE = 'http://opencode.invalid/';
+
+// Mirrors the web proxy (packages/web/server/lib/opencode/proxy.js): a request
+// for a folder of a worktree being removed would start that folder again in
+// OpenCode, local MCP servers included, so it waits for the removal, at most
+// this long. OpenCode decodes a percent-encoded directory header with or
+// without the `uri` marker and also reads `location[directory]`, so a folder
+// is matched the way OpenCode will read it.
+const WORKTREE_REMOVAL_HOLD_MS = 60_000;
+const PERCENT_ESCAPE = /%[0-9a-fA-F]{2}/;
+
+const directoriesAsOpenCodeReadsThem = (resolvedPath: string, headers: Record<string, string>): string[] => {
+  const url = new URL(resolvedPath, RESOLVE_PROBE_BASE);
+  const directories = [...url.searchParams.getAll('directory'), ...url.searchParams.getAll('location[directory]')];
+  const header = headers['x-opencode-directory'];
+  if (header) {
+    let directory = header;
+    if (headers['x-opencode-directory-encoding'] === 'uri' || PERCENT_ESCAPE.test(header)) {
+      try {
+        directory = decodeURIComponent(header);
+      } catch {
+        // OpenCode rejects a malformed value; nothing to match.
+      }
+    }
+    directories.push(directory);
+  }
+  return directories;
+};
+
+const holdForWorktreeRemoval = async (
+  directories: string[],
+  waitForWorktreeRemoval: ProxyRuntimeDeps['waitForWorktreeRemoval'],
+): Promise<void> => {
+  if (directories.length === 0) return;
+  let holdTimer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.all(directories.map((directory) => waitForWorktreeRemoval(directory))),
+      new Promise<void>((resolve) => { holdTimer = setTimeout(resolve, WORKTREE_REMOVAL_HOLD_MS); }),
+    ]);
+  } finally {
+    clearTimeout(holdTimer);
+  }
+};
+
+const trustAnswerResponse = (answer: OpenCodeTrustAnswer): ApiProxyResponsePayload => ({
+  status: answer.status,
+  headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+  bodyText: JSON.stringify(answer.body),
+});
+
+const trustRouteBodySchema = z.object({ directory: z.string().optional(), fingerprint: z.string().nullable().optional() });
+
+/** The body of a trust answer; anything else is no answer, which the route refuses. */
+const parseTrustRouteBody = (bodyBase64: string | undefined): OpenCodeTrustRouteRequest['body'] => {
+  if (!bodyBase64) return undefined;
+  try {
+    const parsed = trustRouteBodySchema.safeParse(JSON.parse(Buffer.from(bodyBase64, 'base64').toString('utf8')));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const sessionRecordSchema = z.object({ location: z.object({ directory: z.string() }) });
+const sessionResponseSchema = z.union([
+  z.object({ data: sessionRecordSchema }).transform((payload) => payload.data.location.directory),
+  sessionRecordSchema.transform((record) => record.location.directory),
+]);
+
+/** The folder a session runs in, read from OpenCode's global session route. */
+const createSessionDirectoryResolver = (ctx: BridgeContext | undefined) => (
+  async (sessionID: string): Promise<string | null> => {
+    const apiUrl = await waitForApiUrl(ctx?.manager);
+    if (!apiUrl) throw new Error('OpenCode is not available');
+    const response = await fetch(new URL(`api/session/${encodeURIComponent(sessionID)}`, `${apiUrl.replace(/\/+$/, '')}/`), {
+      headers: { Accept: 'application/json', ...ctx?.manager?.getOpenCodeAuthHeaders() },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error(`Session lookup answered ${response.status}`);
+    return sessionResponseSchema.parse(await response.json());
+  }
+);
+
+/**
+ * The path OpenCode receives for a webview path, resolved the same way the
+ * request URL is built below; null when it would leave the OpenCode origin.
+ */
+const resolveOpenCodePath = (normalizedPath: string): string | null => {
+  let resolved: URL;
+  try {
+    resolved = new URL(normalizedPath.replace(/^\/+/, ''), RESOLVE_PROBE_BASE);
+  } catch {
+    return null;
+  }
+  if (resolved.origin !== new URL(RESOLVE_PROBE_BASE).origin) return null;
+  return `${resolved.pathname}${resolved.search}`;
 };
 
 export async function handleProxyBridgeMessage(
@@ -199,8 +324,21 @@ export async function handleProxyBridgeMessage(
         return { id, type, success: true, data };
       }
 
+      // The path is resolved as a URL before it goes out, so `/http:api/...`
+      // or `/http://host/...` would reach a path the checks below never saw.
+      // Check what OpenCode will receive, and refuse anything that leaves it.
+      const resolvedPath = resolveOpenCodePath(normalizedPath);
+      if (resolvedPath === null) {
+        const data: ApiProxyResponsePayload = {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify({ error: 'Not an OpenCode path' }),
+        };
+        return { id, type, success: true, data };
+      }
+
       // Enterprise mode: the same provider-connect routes the web server refuses.
-      if (isProviderConnectRequest(normalizedMethod, normalizedPath) && isEnterpriseMode()) {
+      if (isProviderConnectRequest(normalizedMethod, resolvedPath) && isEnterpriseMode()) {
         const data: ApiProxyResponsePayload = {
           status: 403,
           headers: { 'content-type': 'application/json' },
@@ -209,9 +347,59 @@ export async function handleProxyBridgeMessage(
         return { id, type, success: true, data };
       }
 
+      // Every stored key, secrets included: the extension host reads it for
+      // itself, the webview never gets it.
+      if (isCredentialListRequest(normalizedMethod, resolvedPath)) {
+        const data: ApiProxyResponsePayload = {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify({ error: CREDENTIAL_LIST_ERROR, code: 'credential_list_refused' }),
+        };
+        return { id, type, success: true, data };
+      }
+
+      // Same refusal as the web server: no repository in home or at a disk root.
+      const vcsInitRefused = vcsInitRefusal(normalizedMethod, resolvedPath, normalizeHeaderKeys(headers));
+      if (vcsInitRefused) {
+        const data: ApiProxyResponsePayload = {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify(vcsInitRefusalBody(vcsInitRefused)),
+        };
+        return { id, type, success: true, data };
+      }
+
+      // The trust answer is the extension's own, shared with the web server.
+      const requestUrl = new URL(resolvedPath, RESOLVE_PROBE_BASE);
+      if (deps.openCodeTrust && requestUrl.pathname === OPENCODE_TRUST_ROUTE) {
+        const answer = await deps.openCodeTrust.handleRoute({
+          method: normalizedMethod,
+          query: Object.fromEntries(requestUrl.searchParams),
+          body: parseTrustRouteBody(bodyBase64),
+        });
+        return { id, type, success: true, data: trustAnswerResponse(answer) };
+      }
+
       const localFsResponse = await deps.tryHandleLocalFsProxy(normalizedMethod, normalizedPath);
       if (localFsResponse) {
         return { id, type, success: true, data: localFsResponse };
+      }
+
+      await holdForWorktreeRemoval(
+        directoriesAsOpenCodeReadsThem(resolvedPath, normalizeHeaderKeys(headers)),
+        deps.waitForWorktreeRemoval,
+      );
+
+      // Same check as the web proxy: a folder whose OpenCode configuration
+      // runs code stays closed until the user trusts it.
+      const trustRefusal = await deps.openCodeTrust?.refusalFor({
+        method: normalizedMethod,
+        path: resolvedPath,
+        headers: normalizeHeaderKeys(headers),
+        resolveSessionDirectory: createSessionDirectoryResolver(ctx),
+      });
+      if (trustRefusal) {
+        return { id, type, success: true, data: trustAnswerResponse(trustRefusal) };
       }
 
       const apiUrl = await waitForApiUrl(ctx?.manager);
@@ -221,7 +409,16 @@ export async function handleProxyBridgeMessage(
       }
 
       const base = `${apiUrl.replace(/\/+$/, '')}/`;
-      const targetUrl = new URL(normalizedPath.replace(/^\/+/, ''), base).toString();
+      const target = new URL(normalizedPath.replace(/^\/+/, ''), base);
+      if (target.origin !== new URL(base).origin) {
+        const data: ApiProxyResponsePayload = {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+          bodyText: JSON.stringify({ error: 'Not an OpenCode path' }),
+        };
+        return { id, type, success: true, data };
+      }
+      const targetUrl = target.toString();
       const requestHeaders: Record<string, string> = {
         ...deps.sanitizeForwardHeaders(headers),
         ...ctx?.manager?.getOpenCodeAuthHeaders(),
@@ -295,6 +492,21 @@ export async function handleProxyBridgeMessage(
           bodyBase64: deps.base64EncodeUtf8(body),
         };
         return { id, type, success: true, data };
+      }
+
+      await holdForWorktreeRemoval(
+        directoriesAsOpenCodeReadsThem(normalizedPath, normalizeHeaderKeys(headers)),
+        deps.waitForWorktreeRemoval,
+      );
+
+      const promptRefusal = await deps.openCodeTrust?.refusalFor({
+        method: 'POST',
+        path: normalizedPath,
+        headers: normalizeHeaderKeys(headers),
+        resolveSessionDirectory: createSessionDirectoryResolver(ctx),
+      });
+      if (promptRefusal) {
+        return { id, type, success: true, data: trustAnswerResponse(promptRefusal) };
       }
 
       const base = `${apiUrl.replace(/\/+$/, '')}/`;

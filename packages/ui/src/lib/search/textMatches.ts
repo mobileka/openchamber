@@ -7,12 +7,12 @@
  * ("aaa" in "aaaa" yields a single [0,3] match).
  */
 
-export type TextMatchRange = {
+type TextMatchRange = {
   start: number;
   end: number;
 };
 
-export type TextMatchOptions = {
+type TextMatchOptions = {
   caseSensitive?: boolean;
   wholeWord?: boolean;
 };

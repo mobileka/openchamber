@@ -39,6 +39,7 @@ describe('shortcut schema', () => {
       'panels',
       'navigation',
       'application',
+      'desktop',
     ]);
   });
 
@@ -79,7 +80,10 @@ describe('shortcut schema', () => {
   test('every action ships with a default binding', () => {
     // Palette-only commands live outside this schema entirely; an action in
     // the schema without a binding would be dead weight in Settings.
+    // Desktop-category actions are the exception: they register as OS-level
+    // global shortcuts, not in-app bindings, so their default is unassigned.
     for (const action of SHORTCUT_SCHEMA) {
+      if (action.category === 'desktop') continue;
       expect(getEffectiveShortcutCombo(action.id)).not.toBe('');
     }
   });
@@ -92,6 +96,13 @@ describe('shortcut schema', () => {
   test('keeps internal bindings authoritative over persisted overrides', () => {
     expect(getEffectiveShortcutCombo('save_file', { save_file: 'mod+k' })).toBe('mod+s');
     expect(getEffectiveShortcutCombo('save_file', { save_file: '__unassigned__' })).toBe('mod+s');
+  });
+
+  test('surfaces a desktop global combo override as a replaceable conflict', () => {
+    const conflict = getShortcutBindingConflicts('new_chat', 'mod+alt+m', { mini_chat_global: 'mod+alt+m' })
+      .find((candidate) => candidate.action.id === 'mini_chat_global');
+    expect(conflict?.kind).toBe('exact');
+    expect(conflict?.action.customizable).toBe(true);
   });
 
   test('detects conflicts against customizable and internal bindings', () => {
@@ -156,17 +167,6 @@ describe('getShortcutActionsForCombo', () => {
 });
 
 describe('shortcut defaults', () => {
-    // Two actions silently sharing a default binding would race at dispatch
-    // (registry insertion order decides). Pairs that intentionally share a
-    // combo because they can never be active in the same runtime must be
-    // whitelisted here explicitly.
-    const RUNTIME_EXCLUSIVE_BINDING_PAIRS: ReadonlyArray<ReadonlySet<string>> = [
-        // File find and chat find share mod+f. They are contextual, not
-        // runtime-exclusive: the focused surface decides, and each handler
-        // returns false outside its own scope.
-        new Set(['find_in_file', 'find_in_chat']),
-    ];
-
     test('no two actions share a normalized default binding', () => {
         const byBinding = new Map<string, string[]>();
         for (const action of SHORTCUT_SCHEMA) {
@@ -178,9 +178,6 @@ describe('shortcut defaults', () => {
         }
         const conflicts = [...byBinding.entries()]
             .filter(([, ids]) => ids.length > 1)
-            .filter(([, ids]) => !RUNTIME_EXCLUSIVE_BINDING_PAIRS.some(
-                (pair) => ids.every((id) => pair.has(id)),
-            ))
             .map(([combo, ids]) => `"${combo}" shared by ${ids.join(', ')}`);
         expect(conflicts).toEqual([]);
     });

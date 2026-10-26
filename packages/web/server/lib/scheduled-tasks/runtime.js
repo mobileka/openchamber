@@ -24,7 +24,7 @@ const TASK_DUE_SLACK_MS = 5_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 /** Store id of the single global scheduled-tasks document. */
-export const GLOBAL_SCHEDULED_TASKS_ID = 'scheduled-tasks';
+const GLOBAL_SCHEDULED_TASKS_ID = 'scheduled-tasks';
 
 const parseTimeParts = (time) => {
   const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(typeof time === 'string' ? time : '');

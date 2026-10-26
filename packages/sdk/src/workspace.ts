@@ -10,6 +10,12 @@ export type GuestWorktree = {
 };
 /** `waiting-question` means the agent is waiting on an answer — a form it put to the user. */
 export type GuestSessionActivity = 'unknown' | 'idle' | 'running' | 'retrying' | 'waiting-permission' | 'waiting-question';
+/**
+ * A thread linked to a session, by whoever linked it: the user, the agent
+ * (`session.link`), this extension or another. `change` is a code change
+ * under review (a pull, merge or change request).
+ */
+export type GuestSessionLink = { title: string; url: string; kind: 'issue' | 'change'; linkedAt: number };
 export type GuestSessionRecord = {
   id: string;
   title: string;
@@ -24,6 +30,8 @@ export type GuestSessionRecord = {
   /** Observed turn outcome, never a task status. Unknown history stays null. */
   outcome: 'completed' | 'failed' | null;
   items: { id: string; data?: JsonValue }[];
+  /** Every link on the session, read-only. Absent from hosts older than this field. */
+  links?: GuestSessionLink[];
 };
 export type GuestDirectoryCoverage = { directory: string; state: GuestLoadState };
 export type GuestProjectsSnapshot = { kind: 'projects'; state: GuestLoadState; projects: GuestProject[] };
@@ -41,11 +49,15 @@ export type GuestWorkspaceUpdate = { subscriptionId: string; snapshot: GuestWork
 export const GUEST_STORAGE_KEY_MAX = 128;
 export const GUEST_STORAGE_VALUE_BYTES = 65_536;
 export const GUEST_STORAGE_TOTAL_BYTES = 2_097_152;
+/** Maximum bytes retained across all device-scoped guest storage namespaces. */
+export const GUEST_DEVICE_STORAGE_TOTAL_BYTES = 16_777_216;
 export const GUEST_STORAGE_KEYS_MAX = 2_000;
+export type GuestStorageScope = 'instance' | 'device';
+export type GuestStorageOptions = { scope?: GuestStorageScope };
 export type GuestStorageRequest =
-  | { op: 'get' | 'delete'; key: string }
-  | { op: 'set'; key: string; value: JsonValue }
-  | { op: 'keys' };
+  | ({ op: 'get' | 'delete'; key: string } & GuestStorageOptions)
+  | ({ op: 'set'; key: string; value: JsonValue } & GuestStorageOptions)
+  | ({ op: 'keys' } & GuestStorageOptions);
 export type GuestStorageResult = { storage: true } & (
   | { op: 'get'; found: false }
   | { op: 'get'; found: true; value: JsonValue }

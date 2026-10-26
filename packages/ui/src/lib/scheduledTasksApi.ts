@@ -144,7 +144,7 @@ export const runScheduledTaskNow = async (
   };
 };
 
-export type SchedulerStatus = {
+type SchedulerStatus = {
   hasEnabledScheduledTasks: boolean;
   hasRunningScheduledTasks: boolean;
   enabledScheduledTasksCount: number;
